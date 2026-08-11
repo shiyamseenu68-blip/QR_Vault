@@ -156,12 +156,10 @@ app.use((req, res, next) => {
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// 3. API Routes - Synchronously registered for instant availability on serverless cold starts
+// 3. File API Routes
+app.post(['/api/files/upload', '/files/upload'], (req, res) => {
+  console.log(`[UPLOAD REQUEST] Received POST ${req.originalUrl || req.url}`);
 
-// API Route: Upload File
-app.post('/api/files/upload', (req, res) => {
-  console.log(`[UPLOAD REQUEST] Received POST /api/files/upload`);
-  
   upload.single('file')(req, res, (err) => {
     if (err) {
       console.error('[MULTER UPLOAD ERROR]', err);
@@ -259,7 +257,7 @@ app.post('/api/files/upload', (req, res) => {
       console.log(`[DB OPERATION] File ${fileId} registered in database. Total records: ${records.length}`);
 
       const { storagePath: _sp, base64Data: _bd, ...publicRecord } = record;
-      return res.json({ success: true, file: publicRecord });
+      return res.status(200).json({ success: true, file: publicRecord });
     } catch (err: any) {
       console.error('[UPLOAD FATAL EXCEPTION]', err);
       return res.status(500).json({ error: err.message || 'Server error during upload' });
@@ -267,8 +265,36 @@ app.post('/api/files/upload', (req, res) => {
   });
 });
 
+// API Route: Batch History Status Check
+app.post(['/api/files/history', '/files/history'], (req, res) => {
+  const { items } = req.body as { items: { id: string; ownerToken: string }[] };
+  if (!Array.isArray(items)) {
+    return res.status(400).json({ error: 'Invalid payload' });
+  }
+
+  const records = readDB();
+  const updatedRecords = records.map((r) => checkRecordExpiration(r));
+  writeDB(updatedRecords);
+
+  const result = items.map((item) => {
+    const found = updatedRecords.find((r) => r.id === item.id);
+    if (!found) {
+      return { id: item.id, isNotFound: true, isDeleted: true };
+    }
+    const isLimitReached = found.downloadLimit !== null && found.downloadCount >= found.downloadLimit;
+    const { storagePath: _sp, base64Data: _bd, ownerToken, ...publicInfo } = found;
+    return {
+      ...publicInfo,
+      isLimitReached,
+      isOwner: ownerToken === item.ownerToken,
+    };
+  });
+
+  return res.json({ items: result });
+});
+
 // API Route: Get File Info
-app.get('/api/files/:id', (req, res) => {
+app.get(['/api/files/:id', '/files/:id'], (req, res) => {
   const { id } = req.params;
   const records = readDB();
   let record = records.find((r) => r.id === id);
@@ -294,7 +320,7 @@ app.get('/api/files/:id', (req, res) => {
 });
 
 // API Route: Download/Raw File Stream
-app.get('/api/files/:id/raw', (req, res) => {
+app.get(['/api/files/:id/raw', '/files/:id/raw'], (req, res) => {
   const { id } = req.params;
   const records = readDB();
   let record = records.find((r) => r.id === id);
@@ -347,7 +373,7 @@ app.get('/api/files/:id/raw', (req, res) => {
 });
 
 // API Route: Update File Settings (Owner only)
-app.patch('/api/files/:id', (req, res) => {
+app.patch(['/api/files/:id', '/files/:id'], (req, res) => {
   const { id } = req.params;
   const ownerToken = req.headers['x-owner-token'] as string;
 
@@ -394,7 +420,7 @@ app.patch('/api/files/:id', (req, res) => {
 });
 
 // API Route: Delete File (Owner only)
-app.delete('/api/files/:id', (req, res) => {
+app.delete(['/api/files/:id', '/files/:id'], (req, res) => {
   const { id } = req.params;
   const ownerToken = req.headers['x-owner-token'] as string;
 
@@ -423,32 +449,15 @@ app.delete('/api/files/:id', (req, res) => {
   return res.json({ success: true, message: 'File deleted successfully' });
 });
 
-// API Route: Batch History Status Check
-app.post('/api/files/history', (req, res) => {
-  const { items } = req.body as { items: { id: string; ownerToken: string }[] };
-  if (!Array.isArray(items)) {
-    return res.status(400).json({ error: 'Invalid payload' });
+// Global API error handler guaranteeing JSON responses
+app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  console.error('[GLOBAL EXPRESS API ERROR]', err);
+  if (res.headersSent) {
+    return;
   }
-
-  const records = readDB();
-  const updatedRecords = records.map((r) => checkRecordExpiration(r));
-  writeDB(updatedRecords);
-
-  const result = items.map((item) => {
-    const found = updatedRecords.find((r) => r.id === item.id);
-    if (!found) {
-      return { id: item.id, isNotFound: true, isDeleted: true };
-    }
-    const isLimitReached = found.downloadLimit !== null && found.downloadCount >= found.downloadLimit;
-    const { storagePath: _sp, base64Data: _bd, ownerToken, ...publicInfo } = found;
-    return {
-      ...publicInfo,
-      isLimitReached,
-      isOwner: ownerToken === item.ownerToken,
-    };
+  return res.status(err.status || 500).json({
+    error: err.message || 'An internal server error occurred',
   });
-
-  return res.json({ items: result });
 });
 
 // Vite Middleware for Local Development & SPA Fallback for Production
@@ -462,7 +471,7 @@ if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
 } else if (process.env.NODE_ENV === 'production' && !process.env.VERCEL) {
   const distPath = path.join(process.cwd(), 'dist');
   app.use(express.static(distPath));
-  app.get('*all', (_req, res) => {
+  app.get('*', (_req, res) => {
     res.sendFile(path.join(distPath, 'index.html'));
   });
 }
