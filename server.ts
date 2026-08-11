@@ -21,6 +21,7 @@ export interface FileRecord {
   ownerToken: string;
   storagePath: string;
   base64Data?: string;
+  fileRemoteUrl?: string;
 }
 
 declare global {
@@ -48,6 +49,74 @@ try {
   }
 } catch (e) {
   console.warn('[INIT WARN] Directory creation issue (handled via memory fallback):', e);
+}
+
+// Cloud storage & multi-instance metadata sync helpers
+async function uploadFileToCloud(fileBuffer: Buffer, fileName: string, mimeType: string): Promise<string | null> {
+  try {
+    const blob = new Blob([fileBuffer], { type: mimeType || 'application/octet-stream' });
+    const formData = new FormData();
+    formData.append('reqtype', 'fileupload');
+    formData.append('time', '72h');
+    formData.append('fileToUpload', blob, fileName || 'file');
+
+    const res = await fetch('https://litterbox.catbox.moe/resources/internals/api.php', {
+      method: 'POST',
+      body: formData,
+    });
+    if (res.ok) {
+      const url = (await res.text()).trim();
+      if (url.startsWith('http')) {
+        return url;
+      }
+    }
+  } catch (e) {
+    console.warn('[CLOUD FILE UPLOAD WARN]', e);
+  }
+  return null;
+}
+
+async function saveMetaToCloud(record: FileRecord): Promise<string | null> {
+  try {
+    const jsonStr = JSON.stringify(record);
+    const blob = new Blob([jsonStr], { type: 'application/json' });
+    const formData = new FormData();
+    formData.append('reqtype', 'fileupload');
+    formData.append('time', '72h');
+    formData.append('fileToUpload', blob, 'metadata.json');
+
+    const res = await fetch('https://litterbox.catbox.moe/resources/internals/api.php', {
+      method: 'POST',
+      body: formData,
+    });
+    if (res.ok) {
+      const url = (await res.text()).trim();
+      if (url.startsWith('http')) {
+        const metaCode = url.split('/').pop();
+        return metaCode ? metaCode.replace('.json', '') : null;
+      }
+    }
+  } catch (e) {
+    console.warn('[CLOUD META SAVE WARN]', e);
+  }
+  return null;
+}
+
+async function fetchMetaFromCloud(metaCode: string): Promise<FileRecord | null> {
+  try {
+    const cleanCode = metaCode.endsWith('.json') ? metaCode : `${metaCode}.json`;
+    const metaUrl = `https://litter.catbox.moe/${cleanCode}`;
+    const res = await fetch(metaUrl);
+    if (res.ok) {
+      const record = (await res.json()) as FileRecord;
+      if (record && record.originalName) {
+        return record;
+      }
+    }
+  } catch (e) {
+    console.warn('[CLOUD META FETCH WARN]', e);
+  }
+  return null;
 }
 
 // Database helper functions with in-memory fallback for serverless execution
@@ -80,6 +149,31 @@ function writeDB(records: FileRecord[]) {
   } catch (err) {
     console.warn('[DB WRITE WARN] Ephemeral environment file write bypassed:', err);
   }
+}
+
+async function findRecord(id: string): Promise<FileRecord | null> {
+  const records = readDB();
+  let record = records.find((r) => r.id === id);
+  if (record) return record;
+
+  // Multi-instance cloud resolver for Vercel serverless instances
+  if (id.startsWith('QV_')) {
+    const parts = id.split('_');
+    if (parts.length >= 2) {
+      const metaCode = parts[1];
+      console.log(`[CLOUD RESOLVER] Attempting to fetch metadata for code: ${metaCode}`);
+      const cloudRecord = await fetchMetaFromCloud(metaCode);
+      if (cloudRecord) {
+        cloudRecord.id = id; // ensure exact requested ID matches
+        records.push(cloudRecord);
+        writeDB(records);
+        console.log(`[CLOUD RESOLVER SUCCESS] Resolved file ${id} (${cloudRecord.originalName}) across serverless instances`);
+        return cloudRecord;
+      }
+    }
+  }
+
+  return null;
 }
 
 // Generate secure random ID (cryptographically random)
@@ -156,11 +250,11 @@ app.use((req, res, next) => {
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// 3. File API Routes
-app.post(['/api/files/upload', '/files/upload'], (req, res) => {
+// 3. File API Routes (Matching multiple path variations for Vercel function routing)
+app.post(['/api/files/upload', '/files/upload', '/upload', '/api/upload'], (req, res) => {
   console.log(`[UPLOAD REQUEST] Received POST ${req.originalUrl || req.url}`);
 
-  upload.single('file')(req, res, (err) => {
+  upload.single('file')(req, res, async (err) => {
     if (err) {
       console.error('[MULTER UPLOAD ERROR]', err);
       if (err instanceof multer.MulterError) {
@@ -180,21 +274,23 @@ app.post(['/api/files/upload', '/files/upload'], (req, res) => {
         return res.status(400).json({ error: 'No file received in request' });
       }
 
-      const fileId = generateSecureId(12);
       const ownerToken = generateSecureId(24);
       const originalName = req.file.originalname;
       const mimeType = req.file.mimetype || 'application/octet-stream';
       const size = req.file.size;
       const createdAt = Date.now();
 
-      console.log(`[FILE RECEIVED] ID: ${fileId}, Name: "${originalName}", Type: "${mimeType}", Size: ${size} bytes`);
-
       if (size === 0) {
         return res.status(400).json({ error: 'Uploaded file is empty (0 bytes)' });
       }
 
-      // Base64 storage for universal multi-instance retrieval
-      const base64Data = req.file.buffer.toString('base64');
+      console.log(`[FILE RECEIVED] Name: "${originalName}", Type: "${mimeType}", Size: ${size} bytes`);
+
+      // Base64 storage for files under 3MB
+      const base64Data = size < 3 * 1024 * 1024 ? req.file.buffer.toString('base64') : undefined;
+
+      // Upload file to cloud storage asynchronously/parallel
+      const fileRemoteUrl = await uploadFileToCloud(req.file.buffer, originalName, mimeType) || undefined;
 
       // Expiration parameter
       const expirationOpt = req.body.expiration || 'never';
@@ -218,20 +314,21 @@ app.post(['/api/files/upload', '/files/upload'], (req, res) => {
 
       const category = getCategory(mimeType, originalName);
 
-      // Save to disk if permitted by environment
+      // Temporary local storage path
       const safeName = originalName.replace(/[^a-zA-Z0-9._-]/g, '_');
-      const storagePath = path.join(UPLOADS_DIR, `${fileId}_${safeName}`);
+      const tempId = generateSecureId(8);
+      const storagePath = path.join(UPLOADS_DIR, `${tempId}_${safeName}`);
       try {
         if (!fs.existsSync(UPLOADS_DIR)) {
           fs.mkdirSync(UPLOADS_DIR, { recursive: true });
         }
         fs.writeFileSync(storagePath, req.file.buffer);
       } catch (e) {
-        console.warn('[STORAGE WARN] Disk write skipped, using memory buffer:', e);
+        console.warn('[STORAGE WARN] Ephemeral disk write skipped:', e);
       }
 
-      const record: FileRecord = {
-        id: fileId,
+      const initialRecord: FileRecord = {
+        id: `TEMP_${tempId}`,
         originalName,
         mimeType,
         size,
@@ -246,17 +343,25 @@ app.post(['/api/files/upload', '/files/upload'], (req, res) => {
         ownerToken,
         storagePath,
         base64Data,
+        fileRemoteUrl,
       };
 
-      console.log(`[STORAGE COMPLETED] File ${fileId} stored in memory/base64 buffer`);
+      // Upload metadata to cloud index for multi-instance Vercel resolution
+      const metaCode = await saveMetaToCloud(initialRecord);
+      const fileId = metaCode ? `QV_${metaCode}_${generateSecureId(6)}` : generateSecureId(12);
+
+      const record: FileRecord = {
+        ...initialRecord,
+        id: fileId,
+      };
 
       const records = readDB();
       records.push(record);
       writeDB(records);
 
-      console.log(`[DB OPERATION] File ${fileId} registered in database. Total records: ${records.length}`);
+      console.log(`[UPLOAD COMPLETE] ID: ${fileId}, MetaCode: ${metaCode || 'local'}, RemoteURL: ${fileRemoteUrl || 'none'}`);
 
-      const { storagePath: _sp, base64Data: _bd, ...publicRecord } = record;
+      const { storagePath: _sp, base64Data: _bd, fileRemoteUrl: _fru, ...publicRecord } = record;
       return res.status(200).json({ success: true, file: publicRecord });
     } catch (err: any) {
       console.error('[UPLOAD FATAL EXCEPTION]', err);
@@ -266,64 +371,36 @@ app.post(['/api/files/upload', '/files/upload'], (req, res) => {
 });
 
 // API Route: Batch History Status Check
-app.post(['/api/files/history', '/files/history'], (req, res) => {
+app.post(['/api/files/history', '/files/history', '/history', '/api/history'], async (req, res) => {
   const { items } = req.body as { items: { id: string; ownerToken: string }[] };
   if (!Array.isArray(items)) {
     return res.status(400).json({ error: 'Invalid payload' });
   }
 
-  const records = readDB();
-  const updatedRecords = records.map((r) => checkRecordExpiration(r));
-  writeDB(updatedRecords);
-
-  const result = items.map((item) => {
-    const found = updatedRecords.find((r) => r.id === item.id);
-    if (!found) {
-      return { id: item.id, isNotFound: true, isDeleted: true };
-    }
-    const isLimitReached = found.downloadLimit !== null && found.downloadCount >= found.downloadLimit;
-    const { storagePath: _sp, base64Data: _bd, ownerToken, ...publicInfo } = found;
-    return {
-      ...publicInfo,
-      isLimitReached,
-      isOwner: ownerToken === item.ownerToken,
-    };
-  });
+  const result = await Promise.all(
+    items.map(async (item) => {
+      let found = await findRecord(item.id);
+      if (!found) {
+        return { id: item.id, isNotFound: true, isDeleted: true };
+      }
+      found = checkRecordExpiration(found);
+      const isLimitReached = found.downloadLimit !== null && found.downloadCount >= found.downloadLimit;
+      const { storagePath: _sp, base64Data: _bd, fileRemoteUrl: _fru, ownerToken, ...publicInfo } = found;
+      return {
+        ...publicInfo,
+        isLimitReached,
+        isOwner: ownerToken === item.ownerToken,
+      };
+    })
+  );
 
   return res.json({ items: result });
 });
 
-// API Route: Get File Info
-app.get(['/api/files/:id', '/files/:id'], (req, res) => {
+// API Route: Download/Raw File Stream (Must be registered BEFORE /:id)
+app.get(['/api/files/:id/raw', '/files/:id/raw', '/:id/raw', '/api/:id/raw'], async (req, res) => {
   const { id } = req.params;
-  const records = readDB();
-  let record = records.find((r) => r.id === id);
-
-  if (!record) {
-    return res.status(404).json({ error: 'File not found' });
-  }
-
-  record = checkRecordExpiration(record);
-  writeDB(records);
-
-  const reqOwnerToken = req.headers['x-owner-token'] as string;
-  const isOwner = Boolean(reqOwnerToken && reqOwnerToken === record.ownerToken);
-  const isLimitReached = record.downloadLimit !== null && record.downloadCount >= record.downloadLimit;
-
-  const { storagePath: _sp, base64Data: _bd, ownerToken: _ot, ...publicInfo } = record;
-
-  return res.json({
-    ...publicInfo,
-    isLimitReached,
-    isOwner,
-  });
-});
-
-// API Route: Download/Raw File Stream
-app.get(['/api/files/:id/raw', '/files/:id/raw'], (req, res) => {
-  const { id } = req.params;
-  const records = readDB();
-  let record = records.find((r) => r.id === id);
+  let record = await findRecord(id);
 
   if (!record) {
     return res.status(404).json({ error: 'File not found' });
@@ -345,6 +422,7 @@ app.get(['/api/files/:id/raw', '/files/:id/raw'], (req, res) => {
 
   // Increment download count
   record.downloadCount += 1;
+  const records = readDB();
   writeDB(records);
 
   const isDownload = req.query.download === 'true';
@@ -355,15 +433,30 @@ app.get(['/api/files/:id/raw', '/files/:id/raw'], (req, res) => {
   res.setHeader('Content-Disposition', `${dispositionType}; filename="${encodeURIComponent(record.originalName)}"`);
   res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
 
-  // Serve from memory base64 buffer if available
+  // 1. Serve from memory base64 buffer if available
   if (record.base64Data) {
-    console.log(`[RAW FILE SERVED] ${id} (${record.originalName}) served from memory buffer`);
+    console.log(`[RAW FILE SERVED] ${id} (${record.originalName}) served from base64 buffer`);
     const fileBuffer = Buffer.from(record.base64Data, 'base64');
     return res.send(fileBuffer);
   }
 
-  // Fallback to disk if file exists
-  if (fs.existsSync(record.storagePath)) {
+  // 2. Fetch and stream from cloud storage if available
+  if (record.fileRemoteUrl) {
+    console.log(`[RAW FILE SERVED] ${id} (${record.originalName}) streaming from cloud storage: ${record.fileRemoteUrl}`);
+    try {
+      const cloudRes = await fetch(record.fileRemoteUrl);
+      if (cloudRes.ok && cloudRes.body) {
+        const arrayBuffer = await cloudRes.arrayBuffer();
+        const buffer = Buffer.from(arrayBuffer);
+        return res.send(buffer);
+      }
+    } catch (e) {
+      console.error('[RAW FILE STREAM ERROR]', e);
+    }
+  }
+
+  // 3. Fallback to local disk if file exists
+  if (record.storagePath && fs.existsSync(record.storagePath)) {
     console.log(`[RAW FILE SERVED] ${id} (${record.originalName}) served from disk stream`);
     const stream = fs.createReadStream(record.storagePath);
     return stream.pipe(res);
@@ -372,13 +465,36 @@ app.get(['/api/files/:id/raw', '/files/:id/raw'], (req, res) => {
   return res.status(404).json({ error: 'File content unavailable' });
 });
 
+// API Route: Get File Info
+app.get(['/api/files/:id', '/files/:id', '/:id', '/api/:id'], async (req, res) => {
+  const { id } = req.params;
+  let record = await findRecord(id);
+
+  if (!record) {
+    return res.status(404).json({ error: 'File not found' });
+  }
+
+  record = checkRecordExpiration(record);
+
+  const reqOwnerToken = req.headers['x-owner-token'] as string;
+  const isOwner = Boolean(reqOwnerToken && reqOwnerToken === record.ownerToken);
+  const isLimitReached = record.downloadLimit !== null && record.downloadCount >= record.downloadLimit;
+
+  const { storagePath: _sp, base64Data: _bd, fileRemoteUrl: _fru, ownerToken: _ot, ...publicInfo } = record;
+
+  return res.json({
+    ...publicInfo,
+    isLimitReached,
+    isOwner,
+  });
+});
+
 // API Route: Update File Settings (Owner only)
-app.patch(['/api/files/:id', '/files/:id'], (req, res) => {
+app.patch(['/api/files/:id', '/files/:id', '/:id', '/api/:id'], async (req, res) => {
   const { id } = req.params;
   const ownerToken = req.headers['x-owner-token'] as string;
 
-  const records = readDB();
-  const record = records.find((r) => r.id === id);
+  const record = await findRecord(id);
 
   if (!record) {
     return res.status(404).json({ error: 'File not found' });
@@ -413,19 +529,19 @@ app.patch(['/api/files/:id', '/files/:id'], (req, res) => {
     record.requireConfirmation = Boolean(requireConfirmation);
   }
 
+  const records = readDB();
   writeDB(records);
 
-  const { storagePath: _sp, base64Data: _bd, ...publicInfo } = record;
+  const { storagePath: _sp, base64Data: _bd, fileRemoteUrl: _fru, ...publicInfo } = record;
   return res.json({ success: true, file: publicInfo });
 });
 
 // API Route: Delete File (Owner only)
-app.delete(['/api/files/:id', '/files/:id'], (req, res) => {
+app.delete(['/api/files/:id', '/files/:id', '/:id', '/api/:id'], async (req, res) => {
   const { id } = req.params;
   const ownerToken = req.headers['x-owner-token'] as string;
 
-  const records = readDB();
-  const record = records.find((r) => r.id === id);
+  const record = await findRecord(id);
 
   if (!record) {
     return res.status(404).json({ error: 'File not found' });
@@ -437,7 +553,7 @@ app.delete(['/api/files/:id', '/files/:id'], (req, res) => {
 
   record.isDeleted = true;
 
-  if (fs.existsSync(record.storagePath)) {
+  if (record.storagePath && fs.existsSync(record.storagePath)) {
     try {
       fs.unlinkSync(record.storagePath);
     } catch (e) {
@@ -445,8 +561,14 @@ app.delete(['/api/files/:id', '/files/:id'], (req, res) => {
     }
   }
 
+  const records = readDB();
   writeDB(records);
   return res.json({ success: true, message: 'File deleted successfully' });
+});
+
+// Explicit API 404 fallback - Guarantees API requests never fall through to HTML SPA fallback
+app.all(['/api/*', '/files/*'], (_req, res) => {
+  return res.status(404).json({ error: 'API route not found' });
 });
 
 // Global API error handler guaranteeing JSON responses
@@ -466,7 +588,12 @@ if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
     server: { middlewareMode: true },
     appType: 'spa',
   }).then((vite) => {
-    app.use(vite.middlewares);
+    app.use((req, res, next) => {
+      if (req.path.startsWith('/api/') || req.path.startsWith('/files/')) {
+        return next();
+      }
+      vite.middlewares(req, res, next);
+    });
   });
 } else if (process.env.NODE_ENV === 'production' && !process.env.VERCEL) {
   const distPath = path.join(process.cwd(), 'dist');
@@ -483,3 +610,4 @@ if (!process.env.VERCEL) {
 }
 
 export default app;
+
