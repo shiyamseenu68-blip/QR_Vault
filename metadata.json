@@ -1,0 +1,6 @@
+{
+  "name": "QRVault — Universal File to QR Sharing",
+  "description": "Universal file-to-QR sharing platform with secure URL generation, full media/doc previews, real QR camera scanning, download limits, expiration, and history management.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
