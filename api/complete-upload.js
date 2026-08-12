@@ -147,7 +147,7 @@ app.post('/api/files/complete-upload', async (req, res) => {
       fileRemoteUrl: cloudUrl,
     };
 
-    const fileId = generateSecureId(12);
+    const fileId = `QV_${generateSecureId(8)}_${generateSecureId(6)}`;
 
     const record = {
       ...initialRecord,

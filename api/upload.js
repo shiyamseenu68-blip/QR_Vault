@@ -189,7 +189,7 @@ app.post('/api/files/upload', upload.single('file'), async (req, res) => {
       base64Data,
     };
 
-    const fileId = generateSecureId(12);
+    const fileId = `QV_${generateSecureId(8)}_${generateSecureId(6)}`;
 
     const record = {
       ...initialRecord,
