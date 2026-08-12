@@ -1,18 +1,18 @@
 console.log('[UPLOAD.JS] Module loading started');
 
-const express = require('express');
+import express from 'express';
 console.log('[UPLOAD.JS] Express loaded');
 
-const path = require('path');
+import path from 'path';
 console.log('[UPLOAD.JS] Path loaded');
 
-const fs = require('fs');
+import fs from 'fs';
 console.log('[UPLOAD.JS] FS loaded');
 
-const crypto = require('crypto');
+import crypto from 'crypto';
 console.log('[UPLOAD.JS] Crypto loaded');
 
-const multer = require('multer');
+import multer from 'multer';
 console.log('[UPLOAD.JS] Multer loaded');
 
 const isVercel = Boolean(process.env.VERCEL);
@@ -352,5 +352,5 @@ app.use((err, _req, res, _next) => {
 });
 
 console.log('[UPLOAD.JS] Exporting Express app');
-module.exports = app;
+export default app;
 console.log('[UPLOAD.JS] Module loading completed');

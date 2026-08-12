@@ -1,12 +1,12 @@
 console.log('[FILES.JS] Module loading started');
 
-const express = require('express');
+import express from 'express';
 console.log('[FILES.JS] Express loaded');
 
-const path = require('path');
+import path from 'path';
 console.log('[FILES.JS] Path loaded');
 
-const fs = require('fs');
+import fs from 'fs';
 console.log('[FILES.JS] FS loaded');
 
 const isVercel = Boolean(process.env.VERCEL);
@@ -322,5 +322,5 @@ app.use((err, _req, res, _next) => {
 });
 
 console.log('[FILES.JS] Exporting Express app');
-module.exports = app;
+export default app;
 console.log('[FILES.JS] Module loading completed');
