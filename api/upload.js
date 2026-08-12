@@ -166,6 +166,7 @@ const app = express();
 
 // CORS
 app.use((req, res, next) => {
+  console.log('[REQUEST] Method:', req.method, 'URL:', req.url);
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Owner-Token, Authorization');
@@ -175,25 +176,32 @@ app.use((req, res, next) => {
   next();
 });
 
-// Body parsers
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+// IMPORTANT: Do NOT use global body parsers when using multer
+// Body parsers will consume the request stream before multer can process it
+// Only use body parsers for routes that don't handle file uploads
 
-// Upload endpoint
+// Upload endpoint - IMPORTANT: multer middleware BEFORE route handler
 app.post('/api/files/upload', upload.single('file'), async (req, res) => {
   console.log('[UPLOAD] Request received');
+  console.log('[UPLOAD] Headers:', JSON.stringify(req.headers, null, 2));
+  console.log('[UPLOAD] Body type:', typeof req.body);
+  console.log('[UPLOAD] File present:', !!req.file);
 
   try {
     if (!req.file) {
-      console.warn('[UPLOAD FAILED] No file received');
+      console.warn('[UPLOAD FAILED] No file received in request');
+      console.log('[UPLOAD] req.file:', req.file);
+      console.log('[UPLOAD] req.body:', req.body);
       return res.status(400).json({ error: 'No file received in request' });
     }
+
+    console.log('[UPLOAD] Multer parsing completed');
 
     const originalName = req.file.originalname || 'unnamed_file';
     const mimeType = req.file.mimetype || 'application/octet-stream';
     const size = req.file.size || 0;
 
-    console.log(`[UPLOAD] File: ${originalName}, Type: ${mimeType}, Size: ${size}`);
+    console.log(`[UPLOAD] File metadata created - Name: ${originalName}, Type: ${mimeType}, Size: ${size}`);
 
     if (size === 0) {
       return res.status(400).json({ error: 'Uploaded file is empty (0 bytes)' });
@@ -203,13 +211,18 @@ app.post('/api/files/upload', upload.single('file'), async (req, res) => {
     const createdAt = Date.now();
     const category = getCategory(mimeType, originalName);
 
+    console.log('[UPLOAD] Base64 conversion started');
     const base64Data = size < 3 * 1024 * 1024 ? req.file.buffer.toString('base64') : undefined;
+    console.log('[UPLOAD] Base64 conversion completed');
 
+    console.log('[UPLOAD] Cloud file upload started');
     let fileRemoteUrl = undefined;
     try {
       fileRemoteUrl = (await uploadFileToCloud(req.file.buffer, originalName, mimeType)) || undefined;
+      console.log('[UPLOAD] Cloud file upload completed:', fileRemoteUrl ? 'success' : 'failed');
     } catch (e) {
       console.warn('[UPLOAD STORAGE WARN]', e?.message || String(e));
+      console.log('[UPLOAD] Cloud file upload failed with error');
     }
 
     const expirationOpt = req.body?.expiration || 'never';
@@ -238,6 +251,7 @@ app.post('/api/files/upload', upload.single('file'), async (req, res) => {
         fs.mkdirSync(UPLOADS_DIR, { recursive: true });
       }
       fs.writeFileSync(storagePath, req.file.buffer);
+      console.log('[UPLOAD] Local file storage completed');
     } catch (e) {
       console.warn('[UPLOAD STORAGE WARN]', e?.message || String(e));
     }
@@ -261,11 +275,14 @@ app.post('/api/files/upload', upload.single('file'), async (req, res) => {
       fileRemoteUrl,
     };
 
+    console.log('[UPLOAD] Cloud metadata sync started');
     let metaCode = null;
     try {
       metaCode = await saveMetaToCloud(initialRecord);
+      console.log('[UPLOAD] Cloud metadata sync completed:', metaCode ? 'success' : 'failed');
     } catch (e) {
       console.warn('[UPLOAD META WARN]', e?.message || String(e));
+      console.log('[UPLOAD] Cloud metadata sync failed with error');
     }
 
     const fileId = metaCode ? `QV_${metaCode}_${generateSecureId(6)}` : generateSecureId(12);
@@ -275,17 +292,21 @@ app.post('/api/files/upload', upload.single('file'), async (req, res) => {
       id: fileId,
     };
 
+    console.log('[UPLOAD] Database write started');
     const records = readDB();
     records.push(record);
     writeDB(records);
+    console.log('[UPLOAD] Database write completed');
 
-    console.log(`[UPLOAD] Success: ${fileId}`);
+    console.log(`[UPLOAD] Response generation started - File ID: ${fileId}`);
 
     const { storagePath: _sp, base64Data: _bd, fileRemoteUrl: _fru, ...publicRecord } = record;
+    console.log('[UPLOAD] Response generation completed');
     return res.status(200).json({ success: true, file: publicRecord });
 
   } catch (err) {
     console.error('[UPLOAD ERROR]', err);
+    console.error('[UPLOAD ERROR] Stack:', err?.stack);
     if (err instanceof multer.MulterError) {
       if (err.code === 'LIMIT_FILE_SIZE') {
         return res.status(413).json({ error: 'File payload is too large. Maximum allowed size is 100MB.' });
