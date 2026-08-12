@@ -86,65 +86,30 @@ export default function App() {
     try {
       setUploadProgress(20);
 
-      // Step 1: Get upload URL from server
-      console.log('[BLOB CLIENT] requesting upload URL from server');
-      const uploadUrlResponse = await fetch('/api/blob-upload-token', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          filename: file.name,
-          contentType: file.type || 'application/octet-stream',
-          size: file.size,
-        }),
+      console.log('[BLOB CLIENT] importing @vercel/blob/client');
+      const { upload } = await import('@vercel/blob/client');
+      console.log('[BLOB CLIENT] upload function imported from @vercel/blob/client');
+      
+      console.log('[BLOB CLIENT] calling upload() with handleUploadUrl');
+      const uploadResult = await upload(file.name, file, {
+        access: 'public',
+        handleUploadUrl: '/api/blob-upload-token',
+        onUploadProgress: ({ loaded, total }) => {
+          const progress = loaded / total;
+          console.log('[BLOB CLIENT] progress:', Math.round(progress * 100), '%');
+          // Map upload progress to 20-80% range
+          const percent = 20 + Math.round(progress * 60);
+          setUploadProgress(percent);
+        },
       });
 
-      console.log('[BLOB CLIENT] upload URL response status:', uploadUrlResponse.status);
+      console.log('[BLOB CLIENT] blob transfer completed');
+      console.log('[BLOB CLIENT] final blob URL:', uploadResult.url);
+      console.log('[BLOB CLIENT] filename:', uploadResult.filename);
 
-      if (!uploadUrlResponse.ok) {
-        const errorText = await uploadUrlResponse.text();
-        console.error('[BLOB CLIENT] upload URL request failed:', uploadUrlResponse.status, errorText);
-        throw new Error(`Failed to get upload URL: ${uploadUrlResponse.status}`);
-      }
-
-      const uploadUrlData = await uploadUrlResponse.json();
-      console.log('[BLOB CLIENT] upload URL received:', uploadUrlData.uploadUrl);
-      console.log('[BLOB CLIENT] filename:', uploadUrlData.filename);
-
-      // Step 2: Upload directly to Vercel Blob storage
-      setUploadProgress(30);
-      console.log('[BLOB CLIENT] starting direct Blob upload');
-      
-      const uploadXHR = new XMLHttpRequest();
-      uploadXHR.open('PUT', uploadUrlData.uploadUrl, true);
-      uploadXHR.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
-
-      uploadXHR.upload.onprogress = (e) => {
-        if (e.lengthComputable) {
-          const progress = e.loaded / e.total;
-          console.log('[BLOB CLIENT] blob transfer progress:', Math.round(progress * 100), '%');
-          // Map upload progress to 30-80% range
-          const percent = 30 + Math.round(progress * 50);
-          setUploadProgress(percent);
-        }
-      };
-
-      uploadXHR.onload = () => {
-        console.log('[BLOB CLIENT] blob transfer completed, status:', uploadXHR.status);
-        if (uploadXHR.status === 200 || uploadXHR.status === 201) {
-          console.log('[BLOB CLIENT] final blob URL:', uploadUrlData.uploadUrl);
-          // Complete upload with server using Blob URL
-          completeCloudUpload(file, settings, uploadUrlData.uploadUrl, uploadUrlData.filename);
-        } else {
-          throw new Error(`Blob upload failed with status ${uploadXHR.status}`);
-        }
-      };
-
-      uploadXHR.onerror = () => {
-        console.error('[BLOB CLIENT] blob transfer network error');
-        throw new Error('Network error during Blob upload');
-      };
-
-      uploadXHR.send(file);
+      // Complete upload with server using Blob URL
+      console.log('[BLOB CLIENT] complete-upload started');
+      completeCloudUpload(file, settings, uploadResult.url, uploadResult.filename);
 
     } catch (error) {
       console.error('[BLOB CLIENT] upload error:', error);
