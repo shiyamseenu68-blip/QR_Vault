@@ -218,65 +218,17 @@ const upload = multer({
   limits: { fileSize: 100 * 1024 * 1024 },
 });
 
-async function getRawRequestBody(req) {
-  if (req.rawBody && Buffer.isBuffer(req.rawBody)) {
-    return req.rawBody;
-  }
-  if (req.body && Buffer.isBuffer(req.body)) {
-    return req.body;
-  }
-  if (typeof req.body === 'string') {
-    return Buffer.from(req.body);
-  }
-
-  return new Promise((resolve, reject) => {
-    const chunks = [];
-    const timer = setTimeout(() => resolve(Buffer.concat(chunks)), 5000);
-
-    req.on('data', (chunk) => {
-      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, 'binary'));
-    });
-
-    req.on('end', () => {
-      clearTimeout(timer);
-      resolve(Buffer.concat(chunks));
-    });
-
-    req.on('error', (err) => {
-      clearTimeout(timer);
-      reject(err);
-    });
-
-    if (req.readableEnded || req.complete) {
-      clearTimeout(timer);
-      resolve(Buffer.concat(chunks));
-    }
-  });
-}
-
+// Simplified multer handler for Vercel
 function runMulterSingle(req, res, fieldName) {
-  return new Promise(async (resolve, reject) => {
+  return new Promise((resolve, reject) => {
     if (req.file) {
       return resolve();
     }
 
-    try {
-      const rawBuf = await getRawRequestBody(req);
-      console.log(`[UPLOAD] raw body collected (${rawBuf.length} bytes), passing stream to Multer...`);
-      const mockStream = Readable.from(rawBuf);
-      mockStream.headers = req.headers;
-      mockStream.method = req.method;
-      mockStream.url = req.url;
-
-      upload.single(fieldName)(mockStream, res, (err) => {
-        if (err) return reject(err);
-        req.file = mockStream.file;
-        req.body = mockStream.body;
-        resolve();
-      });
-    } catch (e) {
-      reject(e);
-    }
+    upload.single(fieldName)(req, res, (err) => {
+      if (err) return reject(err);
+      resolve();
+    });
   });
 }
 
@@ -649,5 +601,9 @@ app.use((err, _req, res, _next) => {
 
 // Vercel serverless function handler
 module.exports = (req, res) => {
+  // Set timeout for Vercel functions (max 60 seconds for Hobby plan)
+  req.setTimeout(60000);
+  
+  // Handle the request with Express
   app(req, res);
 };
