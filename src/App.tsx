@@ -83,16 +83,12 @@ export default function App() {
     try {
       setUploadProgress(20);
 
-      // Upload directly to Vercel Blob using @vercel/blob
-      const { upload } = await import('@vercel/blob');
+      // Upload directly to Vercel Blob using @vercel/blob/client
+      const { upload } = await import('@vercel/blob/client');
       
-      const uploadResult = await upload(file.name, {
-        method: 'POST',
-        url: '/api/blob-upload-token',
-        headers: {
-          'Content-Type': file.type || 'application/octet-stream',
-        },
-        data: file,
+      const uploadResult = await upload(file.name, file, {
+        access: 'public',
+        handleUploadUrl: '/api/blob-upload-token',
         onUploadProgress: (progress) => {
           // Map upload progress to 20-80% range
           const percent = 20 + Math.round(progress * 60);
