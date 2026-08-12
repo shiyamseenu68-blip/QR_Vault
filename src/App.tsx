@@ -78,31 +78,42 @@ export default function App() {
 
   // Direct Vercel Blob storage upload for large files
   const handleBlobUpload = async (file: File, settings: ShareSettings) => {
-    console.log('[FRONTEND] Using Vercel Blob storage upload for large file');
+    console.log('[BLOB CLIENT] upload started');
+    console.log('[BLOB CLIENT] file name:', file.name);
+    console.log('[BLOB CLIENT] file size:', file.size);
+    console.log('[BLOB CLIENT] file type:', file.type);
 
     try {
       setUploadProgress(20);
 
       // Upload directly to Vercel Blob using @vercel/blob/client
+      console.log('[BLOB CLIENT] importing @vercel/blob/client');
       const { upload } = await import('@vercel/blob/client');
+      console.log('[BLOB CLIENT] upload function imported');
       
+      console.log('[BLOB CLIENT] calling upload() with handleUploadUrl');
       const uploadResult = await upload(file.name, file, {
         access: 'public',
         handleUploadUrl: '/api/blob-upload-token',
         onUploadProgress: (progress) => {
+          console.log('[BLOB CLIENT] progress:', Math.round(progress * 100), '%');
           // Map upload progress to 20-80% range
           const percent = 20 + Math.round(progress * 60);
           setUploadProgress(percent);
         },
       });
 
-      console.log('[FRONTEND] Blob upload completed:', uploadResult.url);
+      console.log('[BLOB CLIENT] blob transfer completed');
+      console.log('[BLOB CLIENT] final blob URL:', uploadResult.url);
+      console.log('[BLOB CLIENT] filename:', uploadResult.filename);
 
       // Complete upload with server using Blob URL
+      console.log('[BLOB CLIENT] complete-upload started');
       completeCloudUpload(file, settings, uploadResult.url, uploadResult.filename);
 
     } catch (error) {
-      console.error('[FRONTEND] Blob upload error:', error);
+      console.error('[BLOB CLIENT] upload error:', error);
+      console.error('[BLOB CLIENT] error details:', error instanceof Error ? error.stack : String(error));
       setUploadError(error instanceof Error ? error.message : 'Blob upload failed');
       setUploadState('idle');
     }
@@ -110,6 +121,10 @@ export default function App() {
 
   // Complete cloud upload with server
   const completeCloudUpload = async (file: File, settings: ShareSettings, cloudUrl: string, blobFilename?: string) => {
+    console.log('[BLOB CLIENT] complete-upload started');
+    console.log('[BLOB CLIENT] cloud URL:', cloudUrl);
+    console.log('[BLOB CLIENT] blob filename:', blobFilename);
+
     try {
       setUploadProgress(85);
       setUploadPhase('processing');
@@ -129,14 +144,17 @@ export default function App() {
         }),
       });
 
+      console.log('[BLOB CLIENT] complete-upload response status:', completeResponse.status);
+
       if (!completeResponse.ok) {
         throw new Error('Failed to complete upload');
       }
 
       const completeData = await completeResponse.json();
-      console.log('[FRONTEND] Upload completed:', completeData);
+      console.log('[BLOB CLIENT] complete-upload response:', completeData);
 
       if (completeData.success && completeData.file) {
+        console.log('[BLOB CLIENT] complete-upload completed successfully');
         setUploadPhase('generating_qr');
         setUploadProgress(100);
 
@@ -164,7 +182,8 @@ export default function App() {
       }
 
     } catch (error) {
-      console.error('[FRONTEND] Complete upload error:', error);
+      console.error('[BLOB CLIENT] complete-upload error:', error);
+      console.error('[BLOB CLIENT] complete-upload error details:', error instanceof Error ? error.stack : String(error));
       setUploadError(error instanceof Error ? error.message : 'Failed to complete upload');
       setUploadState('idle');
     }

@@ -1,20 +1,23 @@
 import { handleUpload } from '@vercel/blob/client';
 
 export default async function handler(request: Request) {
-  console.log('[BLOB TOKEN] request received');
-  console.log('[BLOB TOKEN] method:', request.method);
-  console.log('[BLOB TOKEN] BLOB_READ_WRITE_TOKEN present:', !!process.env.BLOB_READ_WRITE_TOKEN);
+  console.log('[BLOB] token request received');
+  console.log('[BLOB] method:', request.method);
+  console.log('[BLOB] BLOB_READ_WRITE_TOKEN present:', !!process.env.BLOB_READ_WRITE_TOKEN);
+  console.log('[BLOB] credentials available', !!process.env.BLOB_READ_WRITE_TOKEN);
 
   try {
     const body = await request.json();
-    console.log('[BLOB TOKEN] body parsed successfully');
+    console.log('[BLOB] body parsed successfully');
+    console.log('[BLOB] body keys:', Object.keys(body));
 
-    console.log('[BLOB TOKEN] calling handleUpload');
+    console.log('[BLOB] handleUpload started');
 
     const jsonResponse = await handleUpload({
       body,
       request,
       onBeforeGenerateToken: async (pathname) => {
+        console.log('[BLOB] onBeforeGenerateToken called for:', pathname);
         return {
           allowedContentTypes: [
             'image/jpeg',
@@ -45,16 +48,21 @@ export default async function handler(request: Request) {
         };
       },
       onUploadCompleted: async ({ blob }) => {
-        console.log('[BLOB TOKEN] Upload completed:', blob.url);
+        console.log('[BLOB] Upload completed:', blob.url);
+        console.log('[BLOB] Upload filename:', blob.pathname);
       }
     });
 
-    console.log('[BLOB TOKEN] handleUpload completed');
+    console.log('[BLOB] client token generated');
+    console.log('[BLOB] handleUpload response returned');
+    console.log('[BLOB] response keys:', Object.keys(jsonResponse));
 
     return Response.json(jsonResponse);
   } catch (err) {
-    console.error('[BLOB TOKEN] error:', err);
-    console.error('[BLOB TOKEN] error stack:', err?.stack);
+    console.error('[BLOB] error:', err);
+    console.error('[BLOB] error stack:', err?.stack);
+    console.error('[BLOB] error name:', err?.name);
+    console.error('[BLOB] error message:', err?.message);
     return Response.json({ error: err?.message || 'Failed to generate upload token' }, { status: 500 });
   }
 }
