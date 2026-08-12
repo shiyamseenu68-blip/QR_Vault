@@ -171,6 +171,12 @@ app.post('/api/files/upload', upload.single('file'), async (req, res) => {
       console.warn('[UPLOAD STORAGE WARN]', e?.message || String(e));
     }
 
+    const fileId = `QV_${generateSecureId(8)}_${generateSecureId(6)}`;
+    console.log('[UPLOAD] image ID:', fileId);
+    console.log('[UPLOAD] image storage location:', storagePath);
+    console.log('[UPLOAD] base64Data present:', !!base64Data);
+    console.log('[UPLOAD] file size:', size);
+
     const initialRecord = {
       id: `TEMP_${tempId}`,
       originalName,
@@ -189,8 +195,6 @@ app.post('/api/files/upload', upload.single('file'), async (req, res) => {
       base64Data,
     };
 
-    const fileId = `QV_${generateSecureId(8)}_${generateSecureId(6)}`;
-
     const record = {
       ...initialRecord,
       id: fileId,
@@ -199,6 +203,8 @@ app.post('/api/files/upload', upload.single('file'), async (req, res) => {
     const records = readDB();
     records.push(record);
     writeDB(records);
+
+    console.log('[UPLOAD] record saved to database for ID:', fileId);
 
     const { storagePath: _sp, base64Data: _bd, fileRemoteUrl: _fru, ...publicRecord } = record;
     return res.status(200).json({ success: true, file: publicRecord });

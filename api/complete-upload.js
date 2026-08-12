@@ -148,6 +148,8 @@ app.post('/api/files/complete-upload', async (req, res) => {
     };
 
     const fileId = `QV_${generateSecureId(8)}_${generateSecureId(6)}`;
+    console.log('[UPLOAD] image ID (blob upload):', fileId);
+    console.log('[UPLOAD] image storage location (Blob URL):', cloudUrl);
 
     const record = {
       ...initialRecord,
@@ -157,6 +159,8 @@ app.post('/api/files/complete-upload', async (req, res) => {
     const records = readDB();
     records.push(record);
     writeDB(records);
+
+    console.log('[UPLOAD] record saved to database');
 
     const { storagePath: _sp, base64Data: _bd, fileRemoteUrl: _fru, ownerToken: _ot, ...publicRecord } = record;
     return res.status(200).json({ success: true, file: publicRecord });

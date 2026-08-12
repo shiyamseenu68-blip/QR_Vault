@@ -7,9 +7,14 @@ const BASE_DIR = isVercel ? '/tmp' : process.cwd();
 const DATA_DIR = path.join(BASE_DIR, 'data');
 const DB_FILE = path.join(DATA_DIR, 'files.json');
 
+console.log('[FILES] DB_FILE path:', DB_FILE);
+console.log('[FILES] isVercel:', isVercel);
+console.log('[FILES] BASE_DIR:', BASE_DIR);
+
 // Database helpers
 function readDB() {
   if (globalThis._filesDB) {
+    console.log('[FILES] reading from memory cache');
     return globalThis._filesDB;
   }
   try {
@@ -17,12 +22,16 @@ function readDB() {
       const data = fs.readFileSync(DB_FILE, 'utf-8');
       const records = JSON.parse(data);
       globalThis._filesDB = records;
+      console.log('[FILES] read from disk, records count:', records.length);
       return records;
+    } else {
+      console.log('[FILES] DB file does not exist:', DB_FILE);
     }
   } catch (err) {
     console.error('[DB READ ERROR]', err);
   }
   globalThis._filesDB = [];
+  console.log('[FILES] initialized empty DB');
   return globalThis._filesDB;
 }
 
@@ -32,8 +41,10 @@ function writeDB(records) {
     const dataDir = path.dirname(DB_FILE);
     if (!fs.existsSync(dataDir)) {
       fs.mkdirSync(dataDir, { recursive: true });
+      console.log('[FILES] created data directory:', dataDir);
     }
     fs.writeFileSync(DB_FILE, JSON.stringify(records, null, 2), 'utf-8');
+    console.log('[FILES] wrote to disk, records count:', records.length);
   } catch (err) {
     console.warn('[DB WRITE WARN]', err);
   }
@@ -74,11 +85,22 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 // GET file info
 app.get('/api/files/:id', async (req, res) => {
   const { id } = req.params;
+  console.log('[RETRIEVE] requested image ID:', id);
   let record = await findRecord(id);
 
   if (!record) {
+    console.log('[RETRIEVE] metadata not found for ID:', id);
     return res.status(404).json({ error: 'File not found' });
   }
+
+  console.log('[RETRIEVE] metadata found for ID:', id);
+  console.log('[RETRIEVE] record:', {
+    id: record.id,
+    originalName: record.originalName,
+    storagePath: record.storagePath,
+    base64Data: !!record.base64Data,
+    fileRemoteUrl: record.fileRemoteUrl,
+  });
 
   record = checkRecordExpiration(record);
 
@@ -98,12 +120,15 @@ app.get('/api/files/:id', async (req, res) => {
 // GET raw file
 app.get('/api/files/:id/raw', async (req, res) => {
   const { id } = req.params;
+  console.log('[RETRIEVE] raw file request for ID:', id);
   let record = await findRecord(id);
 
   if (!record) {
+    console.log('[RETRIEVE] metadata not found for raw file ID:', id);
     return res.status(404).json({ error: 'File not found' });
   }
 
+  console.log('[RETRIEVE] metadata found for raw file');
   record = checkRecordExpiration(record);
 
   if (record.isDeleted) {
@@ -131,11 +156,14 @@ app.get('/api/files/:id/raw', async (req, res) => {
   res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
 
   if (record.base64Data) {
+    console.log('[RETRIEVE] serving from base64Data');
     const fileBuffer = Buffer.from(record.base64Data, 'base64');
+    console.log('[RETRIEVE] response sent from base64Data');
     return res.send(fileBuffer);
   }
 
   if (record.fileRemoteUrl) {
+    console.log('[RETRIEVE] serving from fileRemoteUrl:', record.fileRemoteUrl);
     try {
       const cloudRes = await fetch(record.fileRemoteUrl, {
         headers: {
@@ -145,6 +173,7 @@ app.get('/api/files/:id/raw', async (req, res) => {
       if (cloudRes.ok && cloudRes.body) {
         const arrayBuffer = await cloudRes.arrayBuffer();
         const buffer = Buffer.from(arrayBuffer);
+        console.log('[RETRIEVE] response sent from fileRemoteUrl');
         return res.send(buffer);
       }
     } catch (e) {
@@ -153,10 +182,13 @@ app.get('/api/files/:id/raw', async (req, res) => {
   }
 
   if (record.storagePath && fs.existsSync(record.storagePath)) {
+    console.log('[RETRIEVE] serving from storagePath:', record.storagePath);
     const stream = fs.createReadStream(record.storagePath);
+    console.log('[RETRIEVE] response sent from storagePath');
     return stream.pipe(res);
   }
 
+  console.log('[RETRIEVE] no storage method available, returning 404');
   return res.status(404).json({ error: 'File content unavailable' });
 });
 
