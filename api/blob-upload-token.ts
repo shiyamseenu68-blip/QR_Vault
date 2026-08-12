@@ -1,68 +1,50 @@
-import { handleUpload } from '@vercel/blob';
+import { put } from '@vercel/blob';
 
 export default async function handler(request: Request) {
   console.log('[BLOB] token request received');
   console.log('[BLOB] method:', request.method);
   console.log('[BLOB] BLOB_READ_WRITE_TOKEN present:', !!process.env.BLOB_READ_WRITE_TOKEN);
-  console.log('[BLOB] checking OIDC auth availability...');
 
   try {
     const body = await request.json();
     console.log('[BLOB] body parsed successfully');
     console.log('[BLOB] body keys:', Object.keys(body));
 
-    console.log('[BLOB] handleUpload started');
+    const { filename, contentType, size } = body;
+    
+    if (!filename || !contentType) {
+      console.error('[BLOB] Missing required fields');
+      return Response.json({ error: 'Missing filename or contentType' }, { status: 400 });
+    }
 
-    const jsonResponse = await handleUpload({
-      body,
-      request,
-      onBeforeGenerateToken: async (pathname) => {
-        console.log('[BLOB] onBeforeGenerateToken called for:', pathname);
-        return {
-          allowedContentTypes: [
-            'image/jpeg',
-            'image/png',
-            'image/webp',
-            'image/gif',
-            'video/mp4',
-            'video/quicktime',
-            'video/webm',
-            'audio/mpeg',
-            'audio/wav',
-            'audio/mp4',
-            'audio/x-m4a',
-            'application/pdf',
-            'application/msword',
-            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-            'application/vnd.ms-excel',
-            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            'application/vnd.ms-powerpoint',
-            'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-            'application/zip',
-            'application/x-zip-compressed',
-            'multipart/x-zip',
-            'application/octet-stream'
-          ],
-          maximumSizeInBytes: 100 * 1024 * 1024,
-          addRandomSuffix: true
-        };
-      },
-      onUploadCompleted: async ({ blob }) => {
-        console.log('[BLOB] Upload completed:', blob.url);
-        console.log('[BLOB] Upload filename:', blob.pathname);
-      }
+    console.log('[BLOB] Generating upload URL with handleUploadUrl');
+
+    // Generate a unique filename
+    const timestamp = Date.now();
+    const randomId = Math.random().toString(36).substring(2, 10);
+    const uniqueFilename = `${timestamp}-${randomId}-${filename}`;
+
+    // Generate upload URL using put with handleUploadUrl
+    const blob = await put(uniqueFilename, [], {
+      access: 'public',
+      contentType,
+      handleUploadUrl: true,
     });
 
-    console.log('[BLOB] client token generated');
-    console.log('[BLOB] handleUpload response returned');
-    console.log('[BLOB] response keys:', Object.keys(jsonResponse));
+    console.log('[BLOB] Upload URL generated successfully');
+    console.log('[BLOB] Upload URL:', blob.url);
+    console.log('[BLOB] Filename:', uniqueFilename);
 
-    return Response.json(jsonResponse);
+    return Response.json({
+      success: true,
+      uploadUrl: blob.url,
+      filename: uniqueFilename,
+    });
   } catch (err) {
     console.error('[BLOB] error:', err);
-    console.error('[BLOB] error stack:', err?.stack);
     console.error('[BLOB] error name:', err?.name);
     console.error('[BLOB] error message:', err?.message);
+    console.error('[BLOB] error stack:', err?.stack);
     return Response.json({ error: err?.message || 'Failed to generate upload token' }, { status: 500 });
   }
 }
