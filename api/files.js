@@ -96,6 +96,7 @@ const app = express();
 
 // CORS
 app.use((req, res, next) => {
+  console.log('[FILES REQUEST] Method:', req.method, 'URL:', req.url);
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Owner-Token, Authorization');
@@ -105,7 +106,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// Body parsers
+// Body parsers (safe for non-file routes)
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
