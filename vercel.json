@@ -13,7 +13,7 @@
     },
     {
       "source": "/api/blob-upload-token",
-      "destination": "/api/blob-upload-token.ts"
+      "destination": "/api/blob-upload-token.js"
     },
     {
       "source": "/api/files/:path*",
