@@ -65,6 +65,136 @@ export default function App() {
     setUploadError(null);
     setUploadState('uploading');
 
+    // For files under 5MB, use serverless upload
+    // For files over 5MB, use direct cloud storage upload
+    const useBlobUpload = file.size > 5 * 1024 * 1024; // 5MB threshold
+
+    if (useBlobUpload) {
+      handleBlobUpload(file, settings);
+    } else {
+      handleServerlessUpload(file, settings);
+    }
+  };
+
+  // Direct cloud storage upload for large files (using catbox.moe)
+  const handleBlobUpload = async (file: File, settings: ShareSettings) => {
+    console.log('[FRONTEND] Using direct cloud storage upload for large file');
+
+    try {
+      // Upload directly to catbox.moe
+      setUploadProgress(20);
+      
+      const formData = new FormData();
+      formData.append('reqtype', 'fileupload');
+      formData.append('time', '72h');
+      formData.append('fileToUpload', file, file.name);
+
+      const uploadXHR = new XMLHttpRequest();
+      uploadXHR.open('POST', 'https://litterbox.catbox.moe/resources/internals/api.php', true);
+
+      uploadXHR.upload.onprogress = (e) => {
+        if (e.lengthComputable) {
+          // Map upload progress to 20-80% range
+          const percent = 20 + Math.round((e.loaded / e.total) * 60);
+          setUploadProgress(percent);
+        }
+      };
+
+      uploadXHR.onload = () => {
+        if (uploadXHR.status === 200) {
+          const cloudUrl = uploadXHR.responseText.trim();
+          console.log('[FRONTEND] Cloud upload completed:', cloudUrl);
+          
+          if (cloudUrl.startsWith('http')) {
+            // Complete upload with server using cloud URL
+            completeCloudUpload(file, settings, cloudUrl);
+          } else {
+            throw new Error('Invalid cloud URL response');
+          }
+        } else {
+          throw new Error(`Cloud upload failed with status ${uploadXHR.status}`);
+        }
+      };
+
+      uploadXHR.onerror = () => {
+        throw new Error('Network error during cloud upload');
+      };
+
+      uploadXHR.send(formData);
+
+    } catch (error) {
+      console.error('[FRONTEND] Cloud upload error:', error);
+      setUploadError(error instanceof Error ? error.message : 'Cloud upload failed');
+      setUploadState('idle');
+    }
+  };
+
+  // Complete cloud upload with server
+  const completeCloudUpload = async (file: File, settings: ShareSettings, cloudUrl: string) => {
+    try {
+      setUploadProgress(85);
+      setUploadPhase('processing');
+
+      const completeResponse = await fetch('/api/files/complete-upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          filename: cloudUrl, // Use cloud URL as identifier
+          originalName: file.name,
+          mimeType: file.type || 'application/octet-stream',
+          size: file.size,
+          expiration: settings.expiration,
+          downloadLimit: String(settings.downloadLimit),
+          requireConfirmation: String(settings.requireConfirmation),
+          cloudUrl, // Pass the actual cloud URL
+        }),
+      });
+
+      if (!completeResponse.ok) {
+        throw new Error('Failed to complete upload');
+      }
+
+      const completeData = await completeResponse.json();
+      console.log('[FRONTEND] Upload completed:', completeData);
+
+      if (completeData.success && completeData.file) {
+        setUploadPhase('generating_qr');
+        setUploadProgress(100);
+
+        setTimeout(() => {
+          const newFile: FileMetadata = completeData.file;
+          setCreatedFile(newFile);
+
+          // Add to local history
+          const historyItem: UserHistoryItem = {
+            id: newFile.id,
+            originalName: newFile.originalName,
+            mimeType: newFile.mimeType,
+            size: newFile.size,
+            createdAt: newFile.createdAt,
+            ownerToken: newFile.ownerToken || '',
+            category: newFile.category,
+          };
+          addLocalHistoryItem(historyItem);
+          refreshHistoryCount();
+
+          setUploadState('result');
+        }, 400);
+      } else {
+        throw new Error(completeData.error || 'Upload completion failed');
+      }
+
+    } catch (error) {
+      console.error('[FRONTEND] Complete upload error:', error);
+      setUploadError(error instanceof Error ? error.message : 'Failed to complete upload');
+      setUploadState('idle');
+    }
+  };
+
+  // Serverless upload for small files
+  const handleServerlessUpload = (file: File, settings: ShareSettings) => {
+    console.log('[FRONTEND] Using serverless upload for small file');
+
     const formData = new FormData();
     formData.append('file', file);
     formData.append('expiration', settings.expiration);

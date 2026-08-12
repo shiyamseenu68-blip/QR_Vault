@@ -1,50 +1,28 @@
-console.log('[UPLOAD.JS] Module loading started');
-
 import express from 'express';
-console.log('[UPLOAD.JS] Express loaded');
-
 import path from 'path';
-console.log('[UPLOAD.JS] Path loaded');
-
 import fs from 'fs';
-console.log('[UPLOAD.JS] FS loaded');
-
 import crypto from 'crypto';
-console.log('[UPLOAD.JS] Crypto loaded');
-
 import multer from 'multer';
-console.log('[UPLOAD.JS] Multer loaded');
 
 const isVercel = Boolean(process.env.VERCEL);
-console.log('[UPLOAD.JS] isVercel:', isVercel);
-
 const BASE_DIR = isVercel ? '/tmp' : process.cwd();
-console.log('[UPLOAD.JS] BASE_DIR:', BASE_DIR);
-
 const UPLOADS_DIR = path.join(BASE_DIR, 'uploads');
 const DATA_DIR = path.join(BASE_DIR, 'data');
 const DB_FILE = path.join(DATA_DIR, 'files.json');
-
-console.log('[UPLOAD.JS] Directory initialization started');
 
 // Ensure base directories exist
 try {
   if (!fs.existsSync(UPLOADS_DIR)) {
     fs.mkdirSync(UPLOADS_DIR, { recursive: true });
-    console.log('[UPLOAD.JS] Created UPLOADS_DIR');
   }
   if (!fs.existsSync(DATA_DIR)) {
     fs.mkdirSync(DATA_DIR, { recursive: true });
-    console.log('[UPLOAD.JS] Created DATA_DIR');
   }
   if (!fs.existsSync(DB_FILE)) {
     fs.writeFileSync(DB_FILE, JSON.stringify([]), 'utf-8');
-    console.log('[UPLOAD.JS] Created DB_FILE');
   }
-  console.log('[UPLOAD.JS] Directory initialization completed');
 } catch (e) {
   console.error('[UPLOAD.JS INIT ERROR]', e);
-  console.error('[UPLOAD.JS INIT ERROR] Stack:', e?.stack);
 }
 
 // Cloud storage helpers
@@ -179,20 +157,15 @@ function getCategory(mimeType, filename) {
   return 'other';
 }
 
-console.log('[UPLOAD.JS] Creating multer instance');
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 100 * 1024 * 1024 },
 });
-console.log('[UPLOAD.JS] Multer instance created');
 
-console.log('[UPLOAD.JS] Creating Express app');
 const app = express();
-console.log('[UPLOAD.JS] Express app created');
 
 // CORS
 app.use((req, res, next) => {
-  console.log('[REQUEST] Method:', req.method, 'URL:', req.url);
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Owner-Token, Authorization');
@@ -208,26 +181,14 @@ app.use((req, res, next) => {
 
 // Upload endpoint - IMPORTANT: multer middleware BEFORE route handler
 app.post('/api/files/upload', upload.single('file'), async (req, res) => {
-  console.log('[UPLOAD] Request received');
-  console.log('[UPLOAD] Headers:', JSON.stringify(req.headers, null, 2));
-  console.log('[UPLOAD] Body type:', typeof req.body);
-  console.log('[UPLOAD] File present:', !!req.file);
-
   try {
     if (!req.file) {
-      console.warn('[UPLOAD FAILED] No file received in request');
-      console.log('[UPLOAD] req.file:', req.file);
-      console.log('[UPLOAD] req.body:', req.body);
       return res.status(400).json({ error: 'No file received in request' });
     }
-
-    console.log('[UPLOAD] Multer parsing completed');
 
     const originalName = req.file.originalname || 'unnamed_file';
     const mimeType = req.file.mimetype || 'application/octet-stream';
     const size = req.file.size || 0;
-
-    console.log(`[UPLOAD] File metadata created - Name: ${originalName}, Type: ${mimeType}, Size: ${size}`);
 
     if (size === 0) {
       return res.status(400).json({ error: 'Uploaded file is empty (0 bytes)' });
@@ -237,18 +198,13 @@ app.post('/api/files/upload', upload.single('file'), async (req, res) => {
     const createdAt = Date.now();
     const category = getCategory(mimeType, originalName);
 
-    console.log('[UPLOAD] Base64 conversion started');
     const base64Data = size < 3 * 1024 * 1024 ? req.file.buffer.toString('base64') : undefined;
-    console.log('[UPLOAD] Base64 conversion completed');
 
-    console.log('[UPLOAD] Cloud file upload started');
     let fileRemoteUrl = undefined;
     try {
       fileRemoteUrl = (await uploadFileToCloud(req.file.buffer, originalName, mimeType)) || undefined;
-      console.log('[UPLOAD] Cloud file upload completed:', fileRemoteUrl ? 'success' : 'failed');
     } catch (e) {
       console.warn('[UPLOAD STORAGE WARN]', e?.message || String(e));
-      console.log('[UPLOAD] Cloud file upload failed with error');
     }
 
     const expirationOpt = req.body?.expiration || 'never';
@@ -277,7 +233,6 @@ app.post('/api/files/upload', upload.single('file'), async (req, res) => {
         fs.mkdirSync(UPLOADS_DIR, { recursive: true });
       }
       fs.writeFileSync(storagePath, req.file.buffer);
-      console.log('[UPLOAD] Local file storage completed');
     } catch (e) {
       console.warn('[UPLOAD STORAGE WARN]', e?.message || String(e));
     }
@@ -301,14 +256,11 @@ app.post('/api/files/upload', upload.single('file'), async (req, res) => {
       fileRemoteUrl,
     };
 
-    console.log('[UPLOAD] Cloud metadata sync started');
     let metaCode = null;
     try {
       metaCode = await saveMetaToCloud(initialRecord);
-      console.log('[UPLOAD] Cloud metadata sync completed:', metaCode ? 'success' : 'failed');
     } catch (e) {
       console.warn('[UPLOAD META WARN]', e?.message || String(e));
-      console.log('[UPLOAD] Cloud metadata sync failed with error');
     }
 
     const fileId = metaCode ? `QV_${metaCode}_${generateSecureId(6)}` : generateSecureId(12);
@@ -318,21 +270,15 @@ app.post('/api/files/upload', upload.single('file'), async (req, res) => {
       id: fileId,
     };
 
-    console.log('[UPLOAD] Database write started');
     const records = readDB();
     records.push(record);
     writeDB(records);
-    console.log('[UPLOAD] Database write completed');
-
-    console.log(`[UPLOAD] Response generation started - File ID: ${fileId}`);
 
     const { storagePath: _sp, base64Data: _bd, fileRemoteUrl: _fru, ...publicRecord } = record;
-    console.log('[UPLOAD] Response generation completed');
     return res.status(200).json({ success: true, file: publicRecord });
 
   } catch (err) {
     console.error('[UPLOAD ERROR]', err);
-    console.error('[UPLOAD ERROR] Stack:', err?.stack);
     if (err instanceof multer.MulterError) {
       if (err.code === 'LIMIT_FILE_SIZE') {
         return res.status(413).json({ error: 'File payload is too large. Maximum allowed size is 100MB.' });
@@ -351,6 +297,4 @@ app.use((err, _req, res, _next) => {
   }
 });
 
-console.log('[UPLOAD.JS] Exporting Express app');
 export default app;
-console.log('[UPLOAD.JS] Module loading completed');

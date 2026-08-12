@@ -8,6 +8,10 @@
       "destination": "/api/upload.js"
     },
     {
+      "source": "/api/files/complete-upload",
+      "destination": "/api/complete-upload.js"
+    },
+    {
       "source": "/api/files/:path*",
       "destination": "/api/files.js"
     },

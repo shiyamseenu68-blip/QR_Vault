@@ -1,13 +1,6 @@
-console.log('[FILES.JS] Module loading started');
-
 import express from 'express';
-console.log('[FILES.JS] Express loaded');
-
 import path from 'path';
-console.log('[FILES.JS] Path loaded');
-
 import fs from 'fs';
-console.log('[FILES.JS] FS loaded');
 
 const isVercel = Boolean(process.env.VERCEL);
 const BASE_DIR = isVercel ? '/tmp' : process.cwd();
@@ -77,13 +70,11 @@ async function findRecord(id) {
     const parts = id.split('_');
     if (parts.length >= 2) {
       const metaCode = parts[1];
-      console.log(`[CLOUD RESOLVER] Fetching metadata for: ${metaCode}`);
       const cloudRecord = await fetchMetaFromCloud(metaCode);
       if (cloudRecord) {
         cloudRecord.id = id;
         records.push(cloudRecord);
         writeDB(records);
-        console.log(`[CLOUD RESOLVER SUCCESS] ${id} (${cloudRecord.originalName})`);
         return cloudRecord;
       }
     }
@@ -103,7 +94,6 @@ const app = express();
 
 // CORS
 app.use((req, res, next) => {
-  console.log('[FILES REQUEST] Method:', req.method, 'URL:', req.url);
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Owner-Token, Authorization');
@@ -177,13 +167,11 @@ app.get('/api/files/:id/raw', async (req, res) => {
   res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
 
   if (record.base64Data) {
-    console.log(`[RAW] ${id} from base64`);
     const fileBuffer = Buffer.from(record.base64Data, 'base64');
     return res.send(fileBuffer);
   }
 
   if (record.fileRemoteUrl) {
-    console.log(`[RAW] ${id} from cloud`);
     try {
       const cloudRes = await fetch(record.fileRemoteUrl, {
         headers: {
@@ -201,7 +189,6 @@ app.get('/api/files/:id/raw', async (req, res) => {
   }
 
   if (record.storagePath && fs.existsSync(record.storagePath)) {
-    console.log(`[RAW] ${id} from disk`);
     const stream = fs.createReadStream(record.storagePath);
     return stream.pipe(res);
   }
@@ -321,6 +308,4 @@ app.use((err, _req, res, _next) => {
   }
 });
 
-console.log('[FILES.JS] Exporting Express app');
 export default app;
-console.log('[FILES.JS] Module loading completed');
