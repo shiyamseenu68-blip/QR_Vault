@@ -76,61 +76,69 @@ export default function App() {
     }
   };
 
-  // Direct cloud storage upload for large files (using catbox.moe)
+  // Direct Vercel Blob storage upload for large files
   const handleBlobUpload = async (file: File, settings: ShareSettings) => {
-    console.log('[FRONTEND] Using direct cloud storage upload for large file');
+    console.log('[FRONTEND] Using Vercel Blob storage upload for large file');
 
     try {
-      // Upload directly to catbox.moe
+      // Step 1: Get upload URL from server
       setUploadProgress(20);
-      
-      const formData = new FormData();
-      formData.append('reqtype', 'fileupload');
-      formData.append('time', '72h');
-      formData.append('fileToUpload', file, file.name);
+      const uploadUrlResponse = await fetch('/api/blob-upload-token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          filename: file.name,
+          contentType: file.type || 'application/octet-stream',
+          size: file.size,
+        }),
+      });
 
+      if (!uploadUrlResponse.ok) {
+        throw new Error('Failed to get upload URL');
+      }
+
+      const uploadUrlData = await uploadUrlResponse.json();
+      console.log('[FRONTEND] Upload URL received:', uploadUrlData.uploadUrl);
+
+      // Step 2: Upload directly to Vercel Blob storage
+      setUploadProgress(30);
       const uploadXHR = new XMLHttpRequest();
-      uploadXHR.open('POST', 'https://litterbox.catbox.moe/resources/internals/api.php', true);
+      uploadXHR.open('PUT', uploadUrlData.uploadUrl, true);
+      uploadXHR.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
 
       uploadXHR.upload.onprogress = (e) => {
         if (e.lengthComputable) {
-          // Map upload progress to 20-80% range
-          const percent = 20 + Math.round((e.loaded / e.total) * 60);
+          // Map upload progress to 30-80% range
+          const percent = 30 + Math.round((e.loaded / e.total) * 50);
           setUploadProgress(percent);
         }
       };
 
       uploadXHR.onload = () => {
-        if (uploadXHR.status === 200) {
-          const cloudUrl = uploadXHR.responseText.trim();
-          console.log('[FRONTEND] Cloud upload completed:', cloudUrl);
-          
-          if (cloudUrl.startsWith('http')) {
-            // Complete upload with server using cloud URL
-            completeCloudUpload(file, settings, cloudUrl);
-          } else {
-            throw new Error('Invalid cloud URL response');
-          }
+        if (uploadXHR.status === 200 || uploadXHR.status === 201) {
+          console.log('[FRONTEND] Blob upload completed');
+          // Step 3: Complete upload with server using Blob URL
+          completeCloudUpload(file, settings, uploadUrlData.uploadUrl, uploadUrlData.filename);
         } else {
-          throw new Error(`Cloud upload failed with status ${uploadXHR.status}`);
+          throw new Error(`Blob upload failed with status ${uploadXHR.status}`);
         }
       };
 
       uploadXHR.onerror = () => {
-        throw new Error('Network error during cloud upload');
+        throw new Error('Network error during Blob upload');
       };
 
-      uploadXHR.send(formData);
+      uploadXHR.send(file);
 
     } catch (error) {
-      console.error('[FRONTEND] Cloud upload error:', error);
-      setUploadError(error instanceof Error ? error.message : 'Cloud upload failed');
+      console.error('[FRONTEND] Blob upload error:', error);
+      setUploadError(error instanceof Error ? error.message : 'Blob upload failed');
       setUploadState('idle');
     }
   };
 
   // Complete cloud upload with server
-  const completeCloudUpload = async (file: File, settings: ShareSettings, cloudUrl: string) => {
+  const completeCloudUpload = async (file: File, settings: ShareSettings, cloudUrl: string, blobFilename?: string) => {
     try {
       setUploadProgress(85);
       setUploadPhase('processing');
@@ -139,14 +147,14 @@ export default function App() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          filename: cloudUrl, // Use cloud URL as identifier
+          filename: blobFilename || cloudUrl,
           originalName: file.name,
           mimeType: file.type || 'application/octet-stream',
           size: file.size,
           expiration: settings.expiration,
           downloadLimit: String(settings.downloadLimit),
           requireConfirmation: String(settings.requireConfirmation),
-          cloudUrl, // Pass the actual cloud URL
+          cloudUrl,
         }),
       });
 

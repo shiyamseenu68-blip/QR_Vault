@@ -12,6 +12,10 @@
       "destination": "/api/complete-upload.js"
     },
     {
+      "source": "/api/blob-upload-token",
+      "destination": "/api/blob-upload-token.js"
+    },
+    {
       "source": "/api/files/:path*",
       "destination": "/api/files.js"
     },
