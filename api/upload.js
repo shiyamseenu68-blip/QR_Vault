@@ -1,28 +1,50 @@
+console.log('[UPLOAD.JS] Module loading started');
+
 const express = require('express');
+console.log('[UPLOAD.JS] Express loaded');
+
 const path = require('path');
+console.log('[UPLOAD.JS] Path loaded');
+
 const fs = require('fs');
+console.log('[UPLOAD.JS] FS loaded');
+
 const crypto = require('crypto');
+console.log('[UPLOAD.JS] Crypto loaded');
+
 const multer = require('multer');
+console.log('[UPLOAD.JS] Multer loaded');
 
 const isVercel = Boolean(process.env.VERCEL);
+console.log('[UPLOAD.JS] isVercel:', isVercel);
+
 const BASE_DIR = isVercel ? '/tmp' : process.cwd();
+console.log('[UPLOAD.JS] BASE_DIR:', BASE_DIR);
+
 const UPLOADS_DIR = path.join(BASE_DIR, 'uploads');
 const DATA_DIR = path.join(BASE_DIR, 'data');
 const DB_FILE = path.join(DATA_DIR, 'files.json');
+
+console.log('[UPLOAD.JS] Directory initialization started');
 
 // Ensure base directories exist
 try {
   if (!fs.existsSync(UPLOADS_DIR)) {
     fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+    console.log('[UPLOAD.JS] Created UPLOADS_DIR');
   }
   if (!fs.existsSync(DATA_DIR)) {
     fs.mkdirSync(DATA_DIR, { recursive: true });
+    console.log('[UPLOAD.JS] Created DATA_DIR');
   }
   if (!fs.existsSync(DB_FILE)) {
     fs.writeFileSync(DB_FILE, JSON.stringify([]), 'utf-8');
+    console.log('[UPLOAD.JS] Created DB_FILE');
   }
+  console.log('[UPLOAD.JS] Directory initialization completed');
 } catch (e) {
-  console.warn('[INIT WARN] Directory creation issue:', e);
+  console.error('[UPLOAD.JS INIT ERROR]', e);
+  console.error('[UPLOAD.JS INIT ERROR] Stack:', e?.stack);
 }
 
 // Cloud storage helpers
@@ -157,12 +179,16 @@ function getCategory(mimeType, filename) {
   return 'other';
 }
 
+console.log('[UPLOAD.JS] Creating multer instance');
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 100 * 1024 * 1024 },
 });
+console.log('[UPLOAD.JS] Multer instance created');
 
+console.log('[UPLOAD.JS] Creating Express app');
 const app = express();
+console.log('[UPLOAD.JS] Express app created');
 
 // CORS
 app.use((req, res, next) => {
@@ -325,4 +351,6 @@ app.use((err, _req, res, _next) => {
   }
 });
 
+console.log('[UPLOAD.JS] Exporting Express app');
 module.exports = app;
+console.log('[UPLOAD.JS] Module loading completed');

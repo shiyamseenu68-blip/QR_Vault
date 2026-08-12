@@ -1,6 +1,13 @@
+console.log('[FILES.JS] Module loading started');
+
 const express = require('express');
+console.log('[FILES.JS] Express loaded');
+
 const path = require('path');
+console.log('[FILES.JS] Path loaded');
+
 const fs = require('fs');
+console.log('[FILES.JS] FS loaded');
 
 const isVercel = Boolean(process.env.VERCEL);
 const BASE_DIR = isVercel ? '/tmp' : process.cwd();
@@ -314,4 +321,6 @@ app.use((err, _req, res, _next) => {
   }
 });
 
+console.log('[FILES.JS] Exporting Express app');
 module.exports = app;
+console.log('[FILES.JS] Module loading completed');
