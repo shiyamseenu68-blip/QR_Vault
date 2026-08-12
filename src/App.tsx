@@ -58,6 +58,7 @@ export default function App() {
 
   // Handle Real Upload
   const handleStartUpload = (file: File, settings: ShareSettings) => {
+    console.log('[FRONTEND] upload started - File:', file.name, file.type, file.size, 'bytes');
     setUploadingFile(file);
     setUploadProgress(0);
     setUploadPhase('uploading');
@@ -82,9 +83,18 @@ export default function App() {
     };
 
     xhr.onload = () => {
-      if (xhr.status === 200) {
+      const status = xhr.status;
+      const contentType = xhr.getResponseHeader('content-type') || 'unknown';
+      const responseText = xhr.responseText || '';
+      const snippet = responseText.slice(0, 150);
+
+      console.log(`[FRONTEND] upload response received - Status: ${status}, Content-Type: ${contentType}`);
+      console.log(`[FRONTEND] response body snippet: ${snippet}`);
+
+      if (status === 200) {
         try {
-          const res = JSON.parse(xhr.responseText);
+          const res = JSON.parse(responseText);
+          console.log('[FRONTEND] upload response JSON parsed successfully:', res);
           if (res.success && res.file) {
             setUploadPhase('processing');
             setUploadProgress(92);
@@ -114,25 +124,31 @@ export default function App() {
               }, 400);
             }, 500);
           } else {
+            console.error('[FRONTEND] upload rejected by server:', res.error);
             setUploadError(res.error || 'Server rejected file upload');
             setUploadState('idle');
           }
         } catch (err) {
-          setUploadError('Invalid response format from server');
+          console.error(`[FRONTEND ERROR] Failed to parse JSON response. Status: ${status}, Content-Type: ${contentType}`);
+          console.error('[FRONTEND ERROR] Raw response content:', responseText);
+          setUploadError(`Invalid JSON response from server (Status ${status}).`);
           setUploadState('idle');
         }
       } else {
         try {
-          const errRes = JSON.parse(xhr.responseText);
-          setUploadError(errRes.error || `Upload failed with status ${xhr.status}`);
+          const errRes = JSON.parse(responseText);
+          console.error('[FRONTEND] upload error response object:', errRes);
+          setUploadError(errRes.error || `Upload failed with status ${status}`);
         } catch (e) {
-          setUploadError(`Something went wrong while uploading your file. (Error ${xhr.status})`);
+          console.error(`[FRONTEND ERROR] Upload HTTP error. Status: ${status}, Content-Type: ${contentType}, Body: ${responseText}`);
+          setUploadError(`Server error (${status}): ${snippet || 'No details returned'}`);
         }
         setUploadState('idle');
       }
     };
 
     xhr.onerror = () => {
+      console.error('[FRONTEND] network error during XHR upload');
       setUploadError('Network error occurred during file upload. Please check your connection.');
       setUploadState('idle');
     };

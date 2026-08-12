@@ -58,12 +58,20 @@ export const UploadArea: React.FC<UploadAreaProps> = ({ onStartUpload }) => {
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
-      setSelectedFile(e.target.files[0]);
+      const file = e.target.files[0];
+      console.log('[FRONTEND] file selected');
+      console.log('[FRONTEND] file name:', file.name);
+      console.log('[FRONTEND] file type:', file.type || 'unknown');
+      console.log('[FRONTEND] file size:', file.size, 'bytes');
+      setSelectedFile(file);
     }
+    // Reset target value so selecting the same file again fires onChange
+    e.target.value = '';
   };
 
   const handleUploadSubmit = () => {
     if (!selectedFile) return;
+    console.log('[FRONTEND] upload started');
     onStartUpload(selectedFile, {
       expiration,
       downloadLimit,
@@ -145,6 +153,10 @@ export const UploadArea: React.FC<UploadAreaProps> = ({ onStartUpload }) => {
               </p>
               <button
                 type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  fileInputRef.current?.click();
+                }}
                 className="inline-flex items-center gap-2 px-6 py-3 rounded-xl font-bold text-xs sm:text-sm bg-gradient-to-r from-[#FF007A] to-[#7D40FF] text-white shadow-lg shadow-[#FF007A]/25 hover:opacity-90 active:scale-95 transition-all min-h-[44px]"
               >
                 <Upload className="w-4 h-4" />

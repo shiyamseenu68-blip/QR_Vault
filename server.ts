@@ -3,6 +3,7 @@ import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
 import multer from 'multer';
+import { Readable } from 'stream';
 import { createServer as createViteServer } from 'vite';
 
 export interface FileRecord {
@@ -62,7 +63,11 @@ async function uploadFileToCloud(fileBuffer: Buffer, fileName: string, mimeType:
 
     const res = await fetch('https://litterbox.catbox.moe/resources/internals/api.php', {
       method: 'POST',
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) QRVault/1.0',
+      },
       body: formData,
+      signal: AbortSignal.timeout(6000),
     });
     if (res.ok) {
       const url = (await res.text()).trim();
@@ -70,8 +75,8 @@ async function uploadFileToCloud(fileBuffer: Buffer, fileName: string, mimeType:
         return url;
       }
     }
-  } catch (e) {
-    console.warn('[CLOUD FILE UPLOAD WARN]', e);
+  } catch (e: any) {
+    console.warn('[CLOUD FILE UPLOAD WARN]', e?.message || String(e));
   }
   return null;
 }
@@ -87,7 +92,11 @@ async function saveMetaToCloud(record: FileRecord): Promise<string | null> {
 
     const res = await fetch('https://litterbox.catbox.moe/resources/internals/api.php', {
       method: 'POST',
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) QRVault/1.0',
+      },
       body: formData,
+      signal: AbortSignal.timeout(6000),
     });
     if (res.ok) {
       const url = (await res.text()).trim();
@@ -96,8 +105,8 @@ async function saveMetaToCloud(record: FileRecord): Promise<string | null> {
         return metaCode ? metaCode.replace('.json', '') : null;
       }
     }
-  } catch (e) {
-    console.warn('[CLOUD META SAVE WARN]', e);
+  } catch (e: any) {
+    console.warn('[CLOUD META SAVE WARN]', e?.message || String(e));
   }
   return null;
 }
@@ -106,7 +115,12 @@ async function fetchMetaFromCloud(metaCode: string): Promise<FileRecord | null> 
   try {
     const cleanCode = metaCode.endsWith('.json') ? metaCode : `${metaCode}.json`;
     const metaUrl = `https://litter.catbox.moe/${cleanCode}`;
-    const res = await fetch(metaUrl);
+    const res = await fetch(metaUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) QRVault/1.0',
+      },
+      signal: AbortSignal.timeout(6000),
+    });
     if (res.ok) {
       const record = (await res.json()) as FileRecord;
       if (record && record.originalName) {
@@ -233,6 +247,70 @@ const upload = multer({
   limits: { fileSize: 100 * 1024 * 1024 }, // 100 MB max limit
 });
 
+// Robust raw body collector supporting Vercel serverless pre-buffered payloads and streams
+async function getRawRequestBody(req: express.Request): Promise<Buffer> {
+  if ((req as any).rawBody && Buffer.isBuffer((req as any).rawBody)) {
+    return (req as any).rawBody;
+  }
+  if (req.body && Buffer.isBuffer(req.body)) {
+    return req.body;
+  }
+  if (typeof req.body === 'string') {
+    return Buffer.from(req.body);
+  }
+
+  return new Promise<Buffer>((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    const timer = setTimeout(() => resolve(Buffer.concat(chunks)), 5000);
+
+    req.on('data', (chunk) => {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, 'binary'));
+    });
+
+    req.on('end', () => {
+      clearTimeout(timer);
+      resolve(Buffer.concat(chunks));
+    });
+
+    req.on('error', (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+
+    if (req.readableEnded || (req as any).complete) {
+      clearTimeout(timer);
+      resolve(Buffer.concat(chunks));
+    }
+  });
+}
+
+// Robust Multer runner supporting both live request streams and pre-buffered bodies (Vercel serverless)
+function runMulterSingle(req: express.Request, res: express.Response, fieldName: string): Promise<void> {
+  return new Promise(async (resolve, reject) => {
+    if (req.file) {
+      return resolve();
+    }
+
+    try {
+      const rawBuf = await getRawRequestBody(req);
+      console.log(`[UPLOAD] raw body collected (${rawBuf.length} bytes), passing stream to Multer...`);
+      const mockStream = Readable.from(rawBuf);
+      (mockStream as any).headers = req.headers;
+      (mockStream as any).method = req.method;
+      (mockStream as any).url = req.url;
+
+      upload.single(fieldName)(mockStream as any, res as any, (err) => {
+        if (err) return reject(err);
+        req.file = (mockStream as any).file;
+        req.body = (mockStream as any).body;
+        resolve();
+      });
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
 export const app = express();
 
 // 1. CORS Middleware
@@ -246,129 +324,154 @@ app.use((req, res, next) => {
   next();
 });
 
-// 2. Express Body Parsers
+// 2. File Upload Route (Placed before express.json body parser to prevent stream pre-consumption)
+app.post(['/api/files/upload', '/files/upload', '/upload', '/api/upload'], async (req, res) => {
+  const reqUrl = req.originalUrl || req.url;
+  const contentType = req.headers['content-type'] || 'unknown';
+  const contentLength = req.headers['content-length'] || 'unknown';
+
+  console.log(`[API] request received - Path: ${reqUrl}, Type: ${contentType}, Length: ${contentLength}`);
+
+  try {
+    await runMulterSingle(req, res, 'file');
+
+    if (!req.file) {
+      console.warn('[UPLOAD FAILED] No file received in request body');
+      return res.status(400).json({ error: 'No file received in request' });
+    }
+
+    const originalName = req.file.originalname || 'unnamed_file';
+    const mimeType = req.file.mimetype || 'application/octet-stream';
+    const size = req.file.size || 0;
+
+    console.log(`[MULTER] file received - Name: "${originalName}", Type: "${mimeType}", Size: ${size} bytes`);
+
+    if (size === 0) {
+      console.warn('[UPLOAD FAILED] Empty file (0 bytes)');
+      return res.status(400).json({ error: 'Uploaded file is empty (0 bytes)' });
+    }
+
+    const ownerToken = generateSecureId(24);
+    const createdAt = Date.now();
+    const category = getCategory(mimeType, originalName);
+
+    console.log(`[UPLOAD] file metadata validated - Category: ${category}`);
+
+    console.log('[UPLOAD] storage started');
+
+    // Base64 storage for files under 3MB
+    const base64Data = size < 3 * 1024 * 1024 ? req.file.buffer.toString('base64') : undefined;
+
+    // Asynchronously or safely attempt remote cloud storage
+    let fileRemoteUrl: string | undefined = undefined;
+    try {
+      fileRemoteUrl = (await uploadFileToCloud(req.file.buffer, originalName, mimeType)) || undefined;
+    } catch (e: any) {
+      console.warn('[UPLOAD STORAGE WARN] Cloud payload storage skipped:', e?.message || String(e));
+    }
+
+    // Expiration parameter
+    const expirationOpt = req.body?.expiration || 'never';
+    let expiresAt: number | null = null;
+    if (expirationOpt === '10m') expiresAt = createdAt + 10 * 60 * 1000;
+    else if (expirationOpt === '1h') expiresAt = createdAt + 60 * 60 * 1000;
+    else if (expirationOpt === '24h') expiresAt = createdAt + 24 * 60 * 60 * 1000;
+    else if (expirationOpt === '7d') expiresAt = createdAt + 7 * 24 * 60 * 60 * 1000;
+    else if (expirationOpt === '30d') expiresAt = createdAt + 30 * 24 * 60 * 60 * 1000;
+
+    // Download limit
+    const limitOpt = req.body?.downloadLimit;
+    let downloadLimit: number | null = null;
+    if (limitOpt && limitOpt !== 'unlimited') {
+      const parsed = parseInt(limitOpt, 10);
+      if (!isNaN(parsed) && parsed > 0) downloadLimit = parsed;
+    }
+
+    const requireConfirmation =
+      req.body?.requireConfirmation === 'true' || req.body?.requireConfirmation === true;
+
+    // Local disk write attempt
+    const safeName = originalName.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const tempId = generateSecureId(8);
+    const storagePath = path.join(UPLOADS_DIR, `${tempId}_${safeName}`);
+    try {
+      if (!fs.existsSync(UPLOADS_DIR)) {
+        fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+      }
+      fs.writeFileSync(storagePath, req.file.buffer);
+    } catch (e: any) {
+      console.warn('[UPLOAD STORAGE WARN] Ephemeral disk write skipped:', e?.message || String(e));
+    }
+
+    console.log('[UPLOAD] storage completed');
+
+    const initialRecord: FileRecord = {
+      id: `TEMP_${tempId}`,
+      originalName,
+      mimeType,
+      size,
+      createdAt,
+      expiresAt,
+      downloadLimit,
+      downloadCount: 0,
+      requireConfirmation,
+      isExpired: false,
+      isDeleted: false,
+      category,
+      ownerToken,
+      storagePath,
+      base64Data,
+      fileRemoteUrl,
+    };
+
+    // Upload metadata index to cloud for multi-instance Vercel resolution
+    let metaCode: string | null = null;
+    try {
+      metaCode = await saveMetaToCloud(initialRecord);
+    } catch (e: any) {
+      console.warn('[UPLOAD META WARN] Meta cloud sync skipped:', e?.message || String(e));
+    }
+
+    const fileId = metaCode ? `QV_${metaCode}_${generateSecureId(6)}` : generateSecureId(12);
+
+    const record: FileRecord = {
+      ...initialRecord,
+      id: fileId,
+    };
+
+    const records = readDB();
+    records.push(record);
+    writeDB(records);
+
+    console.log(`[UPLOAD] metadata created - File ID: ${fileId}, MetaCode: ${metaCode || 'local'}`);
+    console.log(`[UPLOAD] QR URL created - Target Code: /f/${fileId}`);
+
+    const { storagePath: _sp, base64Data: _bd, fileRemoteUrl: _fru, ...publicRecord } = record;
+    console.log('[API] response sent');
+    return res.status(200).json({ success: true, file: publicRecord });
+
+  } catch (err: any) {
+    console.error('[UPLOAD ERROR]');
+    console.error('Error Name:', err?.name || 'Error');
+    console.error('Error Message:', err?.message || String(err));
+    console.error('Error Stack:', err?.stack || 'No stack trace available');
+
+    if (err instanceof multer.MulterError) {
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(413).json({
+          error: 'File payload is too large. Maximum allowed size is 100MB.',
+        });
+      }
+      return res.status(400).json({ error: `Upload error: ${err.message}` });
+    }
+
+    return res.status(500).json({ error: err?.message || 'Server error during upload processing' });
+  }
+});
+
+// 3. Express Body Parsers for remaining non-file API endpoints
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
-
-// 3. File API Routes (Matching multiple path variations for Vercel function routing)
-app.post(['/api/files/upload', '/files/upload', '/upload', '/api/upload'], (req, res) => {
-  console.log(`[UPLOAD REQUEST] Received POST ${req.originalUrl || req.url}`);
-
-  upload.single('file')(req, res, async (err) => {
-    if (err) {
-      console.error('[MULTER UPLOAD ERROR]', err);
-      if (err instanceof multer.MulterError) {
-        if (err.code === 'LIMIT_FILE_SIZE') {
-          return res.status(413).json({
-            error: 'File payload is too large. Maximum allowed size is 100MB.',
-          });
-        }
-        return res.status(400).json({ error: `Upload error: ${err.message}` });
-      }
-      return res.status(500).json({ error: err.message || 'File processing failed' });
-    }
-
-    try {
-      if (!req.file) {
-        console.warn('[UPLOAD FAILED] No file provided in request body');
-        return res.status(400).json({ error: 'No file received in request' });
-      }
-
-      const ownerToken = generateSecureId(24);
-      const originalName = req.file.originalname;
-      const mimeType = req.file.mimetype || 'application/octet-stream';
-      const size = req.file.size;
-      const createdAt = Date.now();
-
-      if (size === 0) {
-        return res.status(400).json({ error: 'Uploaded file is empty (0 bytes)' });
-      }
-
-      console.log(`[FILE RECEIVED] Name: "${originalName}", Type: "${mimeType}", Size: ${size} bytes`);
-
-      // Base64 storage for files under 3MB
-      const base64Data = size < 3 * 1024 * 1024 ? req.file.buffer.toString('base64') : undefined;
-
-      // Upload file to cloud storage asynchronously/parallel
-      const fileRemoteUrl = await uploadFileToCloud(req.file.buffer, originalName, mimeType) || undefined;
-
-      // Expiration parameter
-      const expirationOpt = req.body.expiration || 'never';
-      let expiresAt: number | null = null;
-      if (expirationOpt === '10m') expiresAt = createdAt + 10 * 60 * 1000;
-      else if (expirationOpt === '1h') expiresAt = createdAt + 60 * 60 * 1000;
-      else if (expirationOpt === '24h') expiresAt = createdAt + 24 * 60 * 60 * 1000;
-      else if (expirationOpt === '7d') expiresAt = createdAt + 7 * 24 * 60 * 60 * 1000;
-      else if (expirationOpt === '30d') expiresAt = createdAt + 30 * 24 * 60 * 60 * 1000;
-
-      // Download limit
-      const limitOpt = req.body.downloadLimit;
-      let downloadLimit: number | null = null;
-      if (limitOpt && limitOpt !== 'unlimited') {
-        const parsed = parseInt(limitOpt, 10);
-        if (!isNaN(parsed) && parsed > 0) downloadLimit = parsed;
-      }
-
-      const requireConfirmation =
-        req.body.requireConfirmation === 'true' || req.body.requireConfirmation === true;
-
-      const category = getCategory(mimeType, originalName);
-
-      // Temporary local storage path
-      const safeName = originalName.replace(/[^a-zA-Z0-9._-]/g, '_');
-      const tempId = generateSecureId(8);
-      const storagePath = path.join(UPLOADS_DIR, `${tempId}_${safeName}`);
-      try {
-        if (!fs.existsSync(UPLOADS_DIR)) {
-          fs.mkdirSync(UPLOADS_DIR, { recursive: true });
-        }
-        fs.writeFileSync(storagePath, req.file.buffer);
-      } catch (e) {
-        console.warn('[STORAGE WARN] Ephemeral disk write skipped:', e);
-      }
-
-      const initialRecord: FileRecord = {
-        id: `TEMP_${tempId}`,
-        originalName,
-        mimeType,
-        size,
-        createdAt,
-        expiresAt,
-        downloadLimit,
-        downloadCount: 0,
-        requireConfirmation,
-        isExpired: false,
-        isDeleted: false,
-        category,
-        ownerToken,
-        storagePath,
-        base64Data,
-        fileRemoteUrl,
-      };
-
-      // Upload metadata to cloud index for multi-instance Vercel resolution
-      const metaCode = await saveMetaToCloud(initialRecord);
-      const fileId = metaCode ? `QV_${metaCode}_${generateSecureId(6)}` : generateSecureId(12);
-
-      const record: FileRecord = {
-        ...initialRecord,
-        id: fileId,
-      };
-
-      const records = readDB();
-      records.push(record);
-      writeDB(records);
-
-      console.log(`[UPLOAD COMPLETE] ID: ${fileId}, MetaCode: ${metaCode || 'local'}, RemoteURL: ${fileRemoteUrl || 'none'}`);
-
-      const { storagePath: _sp, base64Data: _bd, fileRemoteUrl: _fru, ...publicRecord } = record;
-      return res.status(200).json({ success: true, file: publicRecord });
-    } catch (err: any) {
-      console.error('[UPLOAD FATAL EXCEPTION]', err);
-      return res.status(500).json({ error: err.message || 'Server error during upload' });
-    }
-  });
-});
 
 // API Route: Batch History Status Check
 app.post(['/api/files/history', '/files/history', '/history', '/api/history'], async (req, res) => {
@@ -444,7 +547,11 @@ app.get(['/api/files/:id/raw', '/files/:id/raw', '/:id/raw', '/api/:id/raw'], as
   if (record.fileRemoteUrl) {
     console.log(`[RAW FILE SERVED] ${id} (${record.originalName}) streaming from cloud storage: ${record.fileRemoteUrl}`);
     try {
-      const cloudRes = await fetch(record.fileRemoteUrl);
+      const cloudRes = await fetch(record.fileRemoteUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) QRVault/1.0',
+        },
+      });
       if (cloudRes.ok && cloudRes.body) {
         const arrayBuffer = await cloudRes.arrayBuffer();
         const buffer = Buffer.from(arrayBuffer);
@@ -583,31 +690,32 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
 });
 
 // Vite Middleware for Local Development & SPA Fallback for Production
-if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
-  createViteServer({
-    server: { middlewareMode: true },
-    appType: 'spa',
-  }).then((vite) => {
-    app.use((req, res, next) => {
-      if (req.path.startsWith('/api/') || req.path.startsWith('/files/')) {
-        return next();
-      }
-      vite.middlewares(req, res, next);
+async function startServer() {
+  if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
+    console.log('[SERVER] Initializing Vite dev server middleware...');
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: 'spa',
     });
-  });
-} else if (process.env.NODE_ENV === 'production' && !process.env.VERCEL) {
-  const distPath = path.join(process.cwd(), 'dist');
-  app.use(express.static(distPath));
-  app.get('*', (_req, res) => {
-    res.sendFile(path.join(distPath, 'index.html'));
-  });
+    app.use(vite.middlewares);
+  } else if (process.env.NODE_ENV === 'production' && !process.env.VERCEL) {
+    const distPath = path.join(process.cwd(), 'dist');
+    app.use(express.static(distPath));
+    app.get('*', (_req, res) => {
+      res.sendFile(path.join(distPath, 'index.html'));
+    });
+  }
+
+  if (!process.env.VERCEL && !process.env.NO_SERVER_LISTEN) {
+    app.listen(PORT, '0.0.0.0', () => {
+      console.log(`QRVault server running on http://0.0.0.0:${PORT}`);
+    });
+  }
 }
 
-if (!process.env.VERCEL) {
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`QRVault server running on http://0.0.0.0:${PORT}`);
-  });
-}
+startServer().catch((err) => {
+  console.error('[SERVER START ERROR]', err);
+});
 
 export default app;
 
