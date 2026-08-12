@@ -600,10 +600,9 @@ app.use((err, _req, res, _next) => {
 });
 
 // Vercel serverless function handler
-module.exports = (req, res) => {
-  // Set timeout for Vercel functions (max 60 seconds for Hobby plan)
-  req.setTimeout(60000);
-  
-  // Handle the request with Express
+const handler = (req, res) => {
+  console.log('[VERCEL FUNCTION] Request received:', req.method, req.url);
   app(req, res);
 };
+
+module.exports = handler;
