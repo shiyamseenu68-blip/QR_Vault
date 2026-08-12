@@ -1,5 +1,5 @@
 import express from 'express';
-import { put } from '@vercel/blob';
+import { handleUpload } from '@vercel/blob/client';
 
 const app = express();
 
@@ -17,41 +17,74 @@ app.use((req, res, next) => {
 // Body parser
 app.use(express.json({ limit: '10mb' }));
 
-// Generate Blob upload URL for client-side upload
+// Handle Vercel Blob client upload token generation
 app.post('/api/blob-upload-token', async (req, res) => {
+  console.log('[BLOB TOKEN] request received');
+  console.log('[BLOB TOKEN] method:', req.method);
+  console.log('[BLOB TOKEN] body parsed:', JSON.stringify(req.body, null, 2));
+  console.log('[BLOB TOKEN] BLOB_READ_WRITE_TOKEN present:', !!process.env.BLOB_READ_WRITE_TOKEN);
+
   try {
-    const { filename, contentType, size } = req.body;
+    const body = req.body;
     
-    if (!filename || !contentType) {
-      return res.status(400).json({ error: 'Missing filename or contentType' });
+    if (!body) {
+      console.error('[BLOB TOKEN] error: No request body');
+      return res.status(400).json({ error: 'No request body' });
     }
 
-    // Generate a unique filename with timestamp and random ID
-    const timestamp = Date.now();
-    const randomId = Math.random().toString(36).substring(2, 10);
-    const uniqueFilename = `${timestamp}-${randomId}-${filename}`;
+    console.log('[BLOB TOKEN] calling handleUpload');
 
-    // Generate upload URL using Vercel Blob's handleUploadUrl option
-    const blob = await put(uniqueFilename, [], {
-      access: 'public',
-      contentType,
-      handleUploadUrl: true,
+    // Use handleUpload to generate client upload token
+    const jsonResponse = await handleUpload({
+      body,
+      request: req,
+      onBeforeGenerateToken: (pathname) => {
+        return {
+          allowedContentTypes: [
+            'image/jpeg',
+            'image/png',
+            'image/webp',
+            'image/gif',
+            'video/mp4',
+            'video/quicktime',
+            'video/webm',
+            'audio/mpeg',
+            'audio/wav',
+            'audio/mp4',
+            'audio/x-m4a',
+            'application/pdf',
+            'application/msword',
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            'application/vnd.ms-excel',
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'application/vnd.ms-powerpoint',
+            'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+            'application/zip',
+            'application/x-zip-compressed',
+            'multipart/x-zip',
+            'application/octet-stream',
+          ],
+          maximumSizeInBytes: 100 * 1024 * 1024, // 100MB
+        };
+      },
+      onUploadCompleted: async ({ blob, formData }) => {
+        console.log('[BLOB TOKEN] Upload completed:', blob.url);
+      },
     });
 
-    return res.status(200).json({
-      success: true,
-      uploadUrl: blob.url,
-      filename: uniqueFilename,
-    });
+    console.log('[BLOB TOKEN] handleUpload completed');
+
+    return jsonResponse;
   } catch (err) {
-    console.error('[BLOB UPLOAD TOKEN ERROR]', err);
+    console.error('[BLOB TOKEN] error:', err);
+    console.error('[BLOB TOKEN] error stack:', err?.stack);
     return res.status(500).json({ error: err?.message || 'Failed to generate upload token' });
   }
 });
 
 // Error handler
 app.use((err, _req, res, _next) => {
-  console.error('[BLOB UPLOAD TOKEN ERROR]', err);
+  console.error('[BLOB TOKEN ERROR]', err);
   if (!res.headersSent) {
     res.status(500).json({ error: err.message || 'Internal server error' });
   }

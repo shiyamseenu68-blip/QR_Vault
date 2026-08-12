@@ -81,54 +81,29 @@ export default function App() {
     console.log('[FRONTEND] Using Vercel Blob storage upload for large file');
 
     try {
-      // Step 1: Get upload URL from server
       setUploadProgress(20);
-      const uploadUrlResponse = await fetch('/api/blob-upload-token', {
+
+      // Upload directly to Vercel Blob using @vercel/blob
+      const { upload } = await import('@vercel/blob');
+      
+      const uploadResult = await upload(file.name, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          filename: file.name,
-          contentType: file.type || 'application/octet-stream',
-          size: file.size,
-        }),
+        url: '/api/blob-upload-token',
+        headers: {
+          'Content-Type': file.type || 'application/octet-stream',
+        },
+        data: file,
+        onUploadProgress: (progress) => {
+          // Map upload progress to 20-80% range
+          const percent = 20 + Math.round(progress * 60);
+          setUploadProgress(percent);
+        },
       });
 
-      if (!uploadUrlResponse.ok) {
-        throw new Error('Failed to get upload URL');
-      }
+      console.log('[FRONTEND] Blob upload completed:', uploadResult.url);
 
-      const uploadUrlData = await uploadUrlResponse.json();
-      console.log('[FRONTEND] Upload URL received:', uploadUrlData.uploadUrl);
-
-      // Step 2: Upload directly to Vercel Blob storage
-      setUploadProgress(30);
-      const uploadXHR = new XMLHttpRequest();
-      uploadXHR.open('PUT', uploadUrlData.uploadUrl, true);
-      uploadXHR.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
-
-      uploadXHR.upload.onprogress = (e) => {
-        if (e.lengthComputable) {
-          // Map upload progress to 30-80% range
-          const percent = 30 + Math.round((e.loaded / e.total) * 50);
-          setUploadProgress(percent);
-        }
-      };
-
-      uploadXHR.onload = () => {
-        if (uploadXHR.status === 200 || uploadXHR.status === 201) {
-          console.log('[FRONTEND] Blob upload completed');
-          // Step 3: Complete upload with server using Blob URL
-          completeCloudUpload(file, settings, uploadUrlData.uploadUrl, uploadUrlData.filename);
-        } else {
-          throw new Error(`Blob upload failed with status ${uploadXHR.status}`);
-        }
-      };
-
-      uploadXHR.onerror = () => {
-        throw new Error('Network error during Blob upload');
-      };
-
-      uploadXHR.send(file);
+      // Complete upload with server using Blob URL
+      completeCloudUpload(file, settings, uploadResult.url, uploadResult.filename);
 
     } catch (error) {
       console.error('[FRONTEND] Blob upload error:', error);
