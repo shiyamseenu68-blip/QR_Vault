@@ -1,31 +1,27 @@
 import express from 'express';
-import path from 'path';
-import fs from 'fs';
+import { list, head, put } from '@vercel/blob';
 
-const isVercel = Boolean(process.env.VERCEL);
-const BASE_DIR = isVercel ? '/tmp' : process.cwd();
-const DATA_DIR = path.join(BASE_DIR, 'data');
-const DB_FILE = path.join(DATA_DIR, 'files.json');
+const DB_BLOB_NAME = 'files-database.json';
 
-console.log('[FILES] DB_FILE path:', DB_FILE);
-console.log('[FILES] isVercel:', isVercel);
-console.log('[FILES] BASE_DIR:', BASE_DIR);
-
-// Database helpers
-function readDB() {
+// Database helpers using Vercel Blob for persistence
+async function readDB() {
   if (globalThis._filesDB) {
     console.log('[FILES] reading from memory cache');
     return globalThis._filesDB;
   }
   try {
-    if (fs.existsSync(DB_FILE)) {
-      const data = fs.readFileSync(DB_FILE, 'utf-8');
+    console.log('[FILES] attempting to read from Vercel Blob');
+    const blobs = await list({ prefix: DB_BLOB_NAME });
+    if (blobs.blobs.length > 0) {
+      const blob = blobs.blobs[0];
+      const response = await fetch(blob.url);
+      const data = await response.text();
       const records = JSON.parse(data);
       globalThis._filesDB = records;
-      console.log('[FILES] read from disk, records count:', records.length);
+      console.log('[FILES] read from Vercel Blob, records count:', records.length);
       return records;
     } else {
-      console.log('[FILES] DB file does not exist:', DB_FILE);
+      console.log('[FILES] no database blob found in Vercel Blob');
     }
   } catch (err) {
     console.error('[DB READ ERROR]', err);
@@ -35,24 +31,38 @@ function readDB() {
   return globalThis._filesDB;
 }
 
-function writeDB(records) {
+async function writeDB(records) {
   globalThis._filesDB = records;
   try {
-    const dataDir = path.dirname(DB_FILE);
-    if (!fs.existsSync(dataDir)) {
-      fs.mkdirSync(dataDir, { recursive: true });
-      console.log('[FILES] created data directory:', dataDir);
-    }
-    fs.writeFileSync(DB_FILE, JSON.stringify(records, null, 2), 'utf-8');
-    console.log('[FILES] wrote to disk, records count:', records.length);
+    const data = JSON.stringify(records, null, 2);
+    const blob = await put(DB_BLOB_NAME, data, {
+      access: 'public',
+      contentType: 'application/json',
+    });
+    console.log('[FILES] wrote to Vercel Blob, records count:', records.length);
+    console.log('[FILES] blob URL:', blob.url);
   } catch (err) {
-    console.warn('[DB WRITE WARN]', err);
+    console.error('[DB WRITE ERROR]', err);
+    throw err;
   }
 }
 
 async function findRecord(id) {
-  const records = readDB();
+  console.log('[FILES] findRecord called with ID:', id);
+  const records = await readDB();
+  console.log('[FILES] Total records in DB:', records.length);
+  console.log('[FILES] All record IDs:', records.map(r => r.id));
   let record = records.find((r) => r.id === id);
+  console.log('[FILES] Record found:', !!record);
+  if (record) {
+    console.log('[FILES] Record details:', {
+      id: record.id,
+      originalName: record.originalName,
+      storagePath: record.storagePath,
+      base64Data: !!record.base64Data,
+      fileRemoteUrl: record.fileRemoteUrl,
+    });
+  }
   if (record) return record;
 
   return null;
@@ -144,8 +154,8 @@ app.get('/api/files/:id/raw', async (req, res) => {
   }
 
   record.downloadCount += 1;
-  const records = readDB();
-  writeDB(records);
+  const records = await readDB();
+  await writeDB(records);
 
   const isDownload = req.query.download === 'true';
   const dispositionType = isDownload ? 'attachment' : 'inline';
@@ -179,13 +189,6 @@ app.get('/api/files/:id/raw', async (req, res) => {
     } catch (e) {
       console.error('[RAW ERROR]', e);
     }
-  }
-
-  if (record.storagePath && fs.existsSync(record.storagePath)) {
-    console.log('[RETRIEVE] serving from storagePath:', record.storagePath);
-    const stream = fs.createReadStream(record.storagePath);
-    console.log('[RETRIEVE] response sent from storagePath');
-    return stream.pipe(res);
   }
 
   console.log('[RETRIEVE] no storage method available, returning 404');
@@ -232,8 +235,8 @@ app.patch('/api/files/:id', async (req, res) => {
     record.requireConfirmation = Boolean(requireConfirmation);
   }
 
-  const records = readDB();
-  writeDB(records);
+  const records = await readDB();
+  await writeDB(records);
 
   const { storagePath: _sp, base64Data: _bd, fileRemoteUrl: _fru, ...publicInfo } = record;
   return res.json({ success: true, file: publicInfo });
@@ -256,16 +259,10 @@ app.delete('/api/files/:id', async (req, res) => {
 
   record.isDeleted = true;
 
-  if (record.storagePath && fs.existsSync(record.storagePath)) {
-    try {
-      fs.unlinkSync(record.storagePath);
-    } catch (e) {
-      console.error('Error deleting file:', e);
-    }
-  }
+  // No need to delete from storage since we use base64/blob storage
 
-  const records = readDB();
-  writeDB(records);
+  const records = await readDB();
+  await writeDB(records);
   return res.json({ success: true, message: 'File deleted successfully' });
 });
 

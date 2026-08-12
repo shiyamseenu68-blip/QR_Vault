@@ -1,42 +1,49 @@
 import express from 'express';
-import path from 'path';
-import fs from 'fs';
 import crypto from 'crypto';
+import { list, put } from '@vercel/blob';
 
-const isVercel = Boolean(process.env.VERCEL);
-const BASE_DIR = isVercel ? '/tmp' : process.cwd();
-const DATA_DIR = path.join(BASE_DIR, 'data');
-const DB_FILE = path.join(DATA_DIR, 'files.json');
+const DB_BLOB_NAME = 'files-database.json';
 
-// Database helpers
-function readDB() {
+// Database helpers using Vercel Blob for persistence
+async function readDB() {
   if (globalThis._filesDB) {
+    console.log('[COMPLETE] reading from memory cache');
     return globalThis._filesDB;
   }
   try {
-    if (fs.existsSync(DB_FILE)) {
-      const data = fs.readFileSync(DB_FILE, 'utf-8');
+    console.log('[COMPLETE] attempting to read from Vercel Blob');
+    const blobs = await list({ prefix: DB_BLOB_NAME });
+    if (blobs.blobs.length > 0) {
+      const blob = blobs.blobs[0];
+      const response = await fetch(blob.url);
+      const data = await response.text();
       const records = JSON.parse(data);
       globalThis._filesDB = records;
+      console.log('[COMPLETE] read from Vercel Blob, records count:', records.length);
       return records;
+    } else {
+      console.log('[COMPLETE] no database blob found in Vercel Blob');
     }
   } catch (err) {
-    console.error('[DB READ ERROR]', err);
+    console.error('[COMPLETE DB READ ERROR]', err);
   }
   globalThis._filesDB = [];
+  console.log('[COMPLETE] initialized empty DB');
   return globalThis._filesDB;
 }
 
-function writeDB(records) {
+async function writeDB(records) {
   globalThis._filesDB = records;
   try {
-    const dataDir = path.dirname(DB_FILE);
-    if (!fs.existsSync(dataDir)) {
-      fs.mkdirSync(dataDir, { recursive: true });
-    }
-    fs.writeFileSync(DB_FILE, JSON.stringify(records, null, 2), 'utf-8');
+    const data = JSON.stringify(records, null, 2);
+    const blob = await put(DB_BLOB_NAME, data, {
+      access: 'public',
+      contentType: 'application/json',
+    });
+    console.log('[COMPLETE] wrote to Vercel Blob, records count:', records.length);
   } catch (err) {
-    console.warn('[DB WRITE WARN]', err);
+    console.error('[COMPLETE DB WRITE ERROR]', err);
+    throw err;
   }
 }
 
@@ -156,9 +163,9 @@ app.post('/api/files/complete-upload', async (req, res) => {
       id: fileId,
     };
 
-    const records = readDB();
+    const records = await readDB();
     records.push(record);
-    writeDB(records);
+    await writeDB(records);
 
     console.log('[UPLOAD] record saved to database');
 

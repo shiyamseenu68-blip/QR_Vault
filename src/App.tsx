@@ -55,6 +55,10 @@ export default function App() {
   // Check if current route is a Receiver File Page (/f/:id)
   const fileViewerMatch = currentPath.match(/\/f\/([a-zA-Z0-9_-]+)/);
   const activeFileId = fileViewerMatch ? fileViewerMatch[1] : null;
+  
+  console.log('[APP] currentPath:', currentPath);
+  console.log('[APP] fileViewerMatch:', fileViewerMatch);
+  console.log('[APP] activeFileId:', activeFileId);
 
   // Handle Real Upload
   const handleStartUpload = (file: File, settings: ShareSettings) => {

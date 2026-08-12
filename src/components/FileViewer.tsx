@@ -41,14 +41,21 @@ export const FileViewer: React.FC<FileViewerProps> = ({ fileId, onGoHome }) => {
     let isMounted = true;
     async function fetchFileInfo() {
       try {
+        console.log('[RETRIEVE] FileViewer requested ID:', fileId);
+        console.log('[RETRIEVE] Full URL path:', window.location.pathname);
         setLoading(true);
         setError(null);
-        const res = await fetch(`/api/files/${fileId}`);
+        const apiUrl = `/api/files/${fileId}`;
+        console.log('[RETRIEVE] API request URL:', apiUrl);
+        const res = await fetch(apiUrl);
+        console.log('[RETRIEVE] API response status:', res.status);
         if (!res.ok) {
           const errData = await res.json().catch(() => ({}));
+          console.log('[RETRIEVE] API error response:', errData);
           throw new Error(errData.error || 'File not found');
         }
         const data: FileMetadata & { isLimitReached?: boolean } = await res.json();
+        console.log('[RETRIEVE] API success response:', data);
         if (isMounted) {
           setFile(data);
           if (!data.requireConfirmation) {
@@ -56,6 +63,7 @@ export const FileViewer: React.FC<FileViewerProps> = ({ fileId, onGoHome }) => {
           }
         }
       } catch (err: any) {
+        console.log('[RETRIEVE] Error during fetch:', err);
         if (isMounted) setError(err.message || 'Error loading file');
       } finally {
         if (isMounted) setLoading(false);

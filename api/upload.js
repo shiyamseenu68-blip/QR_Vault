@@ -3,57 +3,50 @@ import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
 import multer from 'multer';
+import { list, put } from '@vercel/blob';
 
-const isVercel = Boolean(process.env.VERCEL);
-const BASE_DIR = isVercel ? '/tmp' : process.cwd();
-const UPLOADS_DIR = path.join(BASE_DIR, 'uploads');
-const DATA_DIR = path.join(BASE_DIR, 'data');
-const DB_FILE = path.join(DATA_DIR, 'files.json');
+const DB_BLOB_NAME = 'files-database.json';
 
-// Ensure base directories exist
-try {
-  if (!fs.existsSync(UPLOADS_DIR)) {
-    fs.mkdirSync(UPLOADS_DIR, { recursive: true });
-  }
-  if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-  }
-  if (!fs.existsSync(DB_FILE)) {
-    fs.writeFileSync(DB_FILE, JSON.stringify([]), 'utf-8');
-  }
-} catch (e) {
-  console.error('[UPLOAD.JS INIT ERROR]', e);
-}
-
-// Database helpers
-function readDB() {
+// Database helpers using Vercel Blob for persistence
+async function readDB() {
   if (globalThis._filesDB) {
+    console.log('[UPLOAD] reading from memory cache');
     return globalThis._filesDB;
   }
   try {
-    if (fs.existsSync(DB_FILE)) {
-      const data = fs.readFileSync(DB_FILE, 'utf-8');
+    console.log('[UPLOAD] attempting to read from Vercel Blob');
+    const blobs = await list({ prefix: DB_BLOB_NAME });
+    if (blobs.blobs.length > 0) {
+      const blob = blobs.blobs[0];
+      const response = await fetch(blob.url);
+      const data = await response.text();
       const records = JSON.parse(data);
       globalThis._filesDB = records;
+      console.log('[UPLOAD] read from Vercel Blob, records count:', records.length);
       return records;
+    } else {
+      console.log('[UPLOAD] no database blob found in Vercel Blob');
     }
   } catch (err) {
-    console.error('[DB READ ERROR]', err);
+    console.error('[UPLOAD DB READ ERROR]', err);
   }
   globalThis._filesDB = [];
+  console.log('[UPLOAD] initialized empty DB');
   return globalThis._filesDB;
 }
 
-function writeDB(records) {
+async function writeDB(records) {
   globalThis._filesDB = records;
   try {
-    const dataDir = path.dirname(DB_FILE);
-    if (!fs.existsSync(dataDir)) {
-      fs.mkdirSync(dataDir, { recursive: true });
-    }
-    fs.writeFileSync(DB_FILE, JSON.stringify(records, null, 2), 'utf-8');
+    const data = JSON.stringify(records, null, 2);
+    const blob = await put(DB_BLOB_NAME, data, {
+      access: 'public',
+      contentType: 'application/json',
+    });
+    console.log('[UPLOAD] wrote to Vercel Blob, records count:', records.length);
   } catch (err) {
-    console.warn('[DB WRITE WARN]', err);
+    console.error('[UPLOAD DB WRITE ERROR]', err);
+    throw err;
   }
 }
 
@@ -159,26 +152,14 @@ app.post('/api/files/upload', upload.single('file'), async (req, res) => {
     const requireConfirmation =
       req.body?.requireConfirmation === 'true' || req.body?.requireConfirmation === true;
 
-    const safeName = originalName.replace(/[^a-zA-Z0-9._-]/g, '_');
-    const tempId = generateSecureId(8);
-    const storagePath = path.join(UPLOADS_DIR, `${tempId}_${safeName}`);
-    try {
-      if (!fs.existsSync(UPLOADS_DIR)) {
-        fs.mkdirSync(UPLOADS_DIR, { recursive: true });
-      }
-      fs.writeFileSync(storagePath, req.file.buffer);
-    } catch (e) {
-      console.warn('[UPLOAD STORAGE WARN]', e?.message || String(e));
-    }
-
     const fileId = `QV_${generateSecureId(8)}_${generateSecureId(6)}`;
     console.log('[UPLOAD] image ID:', fileId);
-    console.log('[UPLOAD] image storage location:', storagePath);
+    console.log('[UPLOAD] image storage location: base64Data');
     console.log('[UPLOAD] base64Data present:', !!base64Data);
     console.log('[UPLOAD] file size:', size);
 
-    const initialRecord = {
-      id: `TEMP_${tempId}`,
+    const record = {
+      id: fileId,
       originalName,
       mimeType,
       size,
@@ -191,18 +172,13 @@ app.post('/api/files/upload', upload.single('file'), async (req, res) => {
       isDeleted: false,
       category,
       ownerToken,
-      storagePath,
+      storagePath: '',
       base64Data,
     };
 
-    const record = {
-      ...initialRecord,
-      id: fileId,
-    };
-
-    const records = readDB();
+    const records = await readDB();
     records.push(record);
-    writeDB(records);
+    await writeDB(records);
 
     console.log('[UPLOAD] record saved to database for ID:', fileId);
 

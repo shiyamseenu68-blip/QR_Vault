@@ -51,8 +51,9 @@ export const ResultView: React.FC<ResultViewProps> = ({
   const [requireConfirmation, setRequireConfirmation] = useState(file.requireConfirmation);
 
   const fileShareUrl = `${window.location.origin}/f/${file.id}`;
-  console.log('[QR] generated URL:', fileShareUrl);
-  console.log('[QR] file ID:', file.id);
+  console.log('[QR] FULL GENERATED URL:', fileShareUrl);
+  console.log('[QR] FILE ID:', file.id);
+  console.log('[QR] window.location.origin:', window.location.origin);
 
   useEffect(() => {
     let isMounted = true;
