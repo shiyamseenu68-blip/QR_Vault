@@ -25,65 +25,6 @@ try {
   console.error('[UPLOAD.JS INIT ERROR]', e);
 }
 
-// Cloud storage helpers
-async function uploadFileToCloud(fileBuffer, fileName, mimeType) {
-  try {
-    const blob = new Blob([fileBuffer], { type: mimeType || 'application/octet-stream' });
-    const formData = new FormData();
-    formData.append('reqtype', 'fileupload');
-    formData.append('time', '72h');
-    formData.append('fileToUpload', blob, fileName || 'file');
-
-    const res = await fetch('https://litterbox.catbox.moe/resources/internals/api.php', {
-      method: 'POST',
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x86) QRVault/1.0',
-      },
-      body: formData,
-      signal: AbortSignal.timeout(6000),
-    });
-    if (res.ok) {
-      const url = (await res.text()).trim();
-      if (url.startsWith('http')) {
-        return url;
-      }
-    }
-  } catch (e) {
-    console.warn('[CLOUD FILE UPLOAD WARN]', e?.message || String(e));
-  }
-  return null;
-}
-
-async function saveMetaToCloud(record) {
-  try {
-    const jsonStr = JSON.stringify(record);
-    const blob = new Blob([jsonStr], { type: 'application/json' });
-    const formData = new FormData();
-    formData.append('reqtype', 'fileupload');
-    formData.append('time', '72h');
-    formData.append('fileToUpload', blob, 'metadata.json');
-
-    const res = await fetch('https://litterbox.catbox.moe/resources/internals/api.php', {
-      method: 'POST',
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x86) QRVault/1.0',
-      },
-      body: formData,
-      signal: AbortSignal.timeout(6000),
-    });
-    if (res.ok) {
-      const url = (await res.text()).trim();
-      if (url.startsWith('http')) {
-        const metaCode = url.split('/').pop();
-        return metaCode ? metaCode.replace('.json', '') : null;
-      }
-    }
-  } catch (e) {
-    console.warn('[CLOUD META SAVE WARN]', e?.message || String(e));
-  }
-  return null;
-}
-
 // Database helpers
 function readDB() {
   if (globalThis._filesDB) {
@@ -200,13 +141,6 @@ app.post('/api/files/upload', upload.single('file'), async (req, res) => {
 
     const base64Data = size < 3 * 1024 * 1024 ? req.file.buffer.toString('base64') : undefined;
 
-    let fileRemoteUrl = undefined;
-    try {
-      fileRemoteUrl = (await uploadFileToCloud(req.file.buffer, originalName, mimeType)) || undefined;
-    } catch (e) {
-      console.warn('[UPLOAD STORAGE WARN]', e?.message || String(e));
-    }
-
     const expirationOpt = req.body?.expiration || 'never';
     let expiresAt = null;
     if (expirationOpt === '10m') expiresAt = createdAt + 10 * 60 * 1000;
@@ -253,17 +187,9 @@ app.post('/api/files/upload', upload.single('file'), async (req, res) => {
       ownerToken,
       storagePath,
       base64Data,
-      fileRemoteUrl,
     };
 
-    let metaCode = null;
-    try {
-      metaCode = await saveMetaToCloud(initialRecord);
-    } catch (e) {
-      console.warn('[UPLOAD META WARN]', e?.message || String(e));
-    }
-
-    const fileId = metaCode ? `QV_${metaCode}_${generateSecureId(6)}` : generateSecureId(12);
+    const fileId = generateSecureId(12);
 
     const record = {
       ...initialRecord,

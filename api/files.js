@@ -39,46 +39,10 @@ function writeDB(records) {
   }
 }
 
-async function fetchMetaFromCloud(metaCode) {
-  try {
-    const cleanCode = metaCode.endsWith('.json') ? metaCode : `${metaCode}.json`;
-    const metaUrl = `https://litter.catbox.moe/${cleanCode}`;
-    const res = await fetch(metaUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x86) QRVault/1.0',
-      },
-      signal: AbortSignal.timeout(6000),
-    });
-    if (res.ok) {
-      const record = await res.json();
-      if (record && record.originalName) {
-        return record;
-      }
-    }
-  } catch (e) {
-    console.warn('[CLOUD META FETCH WARN]', e);
-  }
-  return null;
-}
-
 async function findRecord(id) {
   const records = readDB();
   let record = records.find((r) => r.id === id);
   if (record) return record;
-
-  if (id.startsWith('QV_')) {
-    const parts = id.split('_');
-    if (parts.length >= 2) {
-      const metaCode = parts[1];
-      const cloudRecord = await fetchMetaFromCloud(metaCode);
-      if (cloudRecord) {
-        cloudRecord.id = id;
-        records.push(cloudRecord);
-        writeDB(records);
-        return cloudRecord;
-      }
-    }
-  }
 
   return null;
 }

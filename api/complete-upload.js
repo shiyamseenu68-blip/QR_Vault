@@ -81,36 +81,6 @@ function getCategory(mimeType, filename) {
   return 'other';
 }
 
-async function saveMetaToCloud(record) {
-  try {
-    const jsonStr = JSON.stringify(record);
-    const blob = new Blob([jsonStr], { type: 'application/json' });
-    const formData = new FormData();
-    formData.append('reqtype', 'fileupload');
-    formData.append('time', '72h');
-    formData.append('fileToUpload', blob, 'metadata.json');
-
-    const res = await fetch('https://litterbox.catbox.moe/resources/internals/api.php', {
-      method: 'POST',
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x86) QRVault/1.0',
-      },
-      body: formData,
-      signal: AbortSignal.timeout(6000),
-    });
-    if (res.ok) {
-      const url = (await res.text()).trim();
-      if (url.startsWith('http')) {
-        const metaCode = url.split('/').pop();
-        return metaCode ? metaCode.replace('.json', '') : null;
-      }
-    }
-  } catch (e) {
-    console.warn('[CLOUD META SAVE WARN]', e?.message || String(e));
-  }
-  return null;
-}
-
 const app = express();
 
 // CORS
@@ -177,14 +147,7 @@ app.post('/api/files/complete-upload', async (req, res) => {
       fileRemoteUrl: cloudUrl,
     };
 
-    let metaCode = null;
-    try {
-      metaCode = await saveMetaToCloud(initialRecord);
-    } catch (e) {
-      console.warn('[COMPLETE UPLOAD META WARN]', e?.message || String(e));
-    }
-
-    const fileId = metaCode ? `QV_${metaCode}_${generateSecureId(6)}` : generateSecureId(12);
+    const fileId = generateSecureId(12);
 
     const record = {
       ...initialRecord,

@@ -17,7 +17,7 @@ app.use((req, res, next) => {
 // Body parser
 app.use(express.json({ limit: '10mb' }));
 
-// Generate Blob upload token endpoint
+// Generate Blob upload URL for client-side upload
 app.post('/api/blob-upload-token', async (req, res) => {
   try {
     const { filename, contentType, size } = req.body;
@@ -31,10 +31,11 @@ app.post('/api/blob-upload-token', async (req, res) => {
     const randomId = Math.random().toString(36).substring(2, 10);
     const uniqueFilename = `${timestamp}-${randomId}-${filename}`;
 
-    // Generate upload URL from Vercel Blob
+    // Generate upload URL using Vercel Blob's handleUploadUrl option
     const blob = await put(uniqueFilename, [], {
       access: 'public',
       contentType,
+      handleUploadUrl: true,
     });
 
     return res.status(200).json({
